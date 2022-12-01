@@ -1,0 +1,32 @@
+mkdir build
+cd build
+../configure --prefix=/home/hw470/Documents/Work/db/postgres/build
+sudo make
+sudo make install
+
+# create the data directory
+mkdir data
+./bin/initdb ./data/
+
+# start the server
+./bin/pg_ctl -D ./data/ start
+
+# create a default user
+./bin/createuser -s -r postgres
+
+# connect to server
+./bin/psql postgres
+
+# db user
+\du
+
+# use db
+create database testdb;
+\l # list db
+\c testdb # connect
+ insert into t1(id, name) values(1, 'hao'), (2, 'wen');
+ select * from t1;
+
+
+# resources:
+https://postgresqltutorial.com/
