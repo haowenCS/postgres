@@ -11,6 +11,12 @@ mkdir data
 # start the server
 ./bin/pg_ctl -D ./data/ start
 
+20230114:
+ERROR: could not bind IPv4 address "127.0.0.1": Address already in use
+Solution:
+Change the port number for the server in the postgresql.conf file
+position: ./data/postgresql.conf port->5433
+
 # create a default user
 ./bin/createuser -s -r postgres
 
