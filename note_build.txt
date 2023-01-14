@@ -37,3 +37,7 @@ https://postgresqltutorial.com/
 Debug:
 select pg_backend_pid();
 https://zhuanlan.zhihu.com/p/591360747
+
+---
+sudo lsof -i :5432
+kill -9 pid
