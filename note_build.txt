@@ -32,3 +32,8 @@ create database testdb;
 
 # resources:
 https://postgresqltutorial.com/
+
+---
+Debug:
+select pg_backend_pid();
+https://zhuanlan.zhihu.com/p/591360747
