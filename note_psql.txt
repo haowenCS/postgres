@@ -1,0 +1,19 @@
+\l: lists all the database in postgres
+
+\dt: display all the tables in the current database;
+
+\h or \?: help
+
+\d table_name: describe table
+
+---
+
+resources:
+
+1. Note:
+
+https://github.com/wand2016/study/blob/69c41b8e0b50a8fc71f5922f5d1fa73a86f8e123/2020/02/25/234016.md
+
+2. The Internals of PostgreSQL
+
+https://www.interdb.jp/pg/index.html
