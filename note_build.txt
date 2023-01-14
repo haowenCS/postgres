@@ -11,6 +11,9 @@ mkdir data
 # start the server
 ./bin/pg_ctl -D ./data/ start
 
+# stop the server
+./bin/pg_ctl stop -D ./data -m fast
+
 # configure file location: ./data/postgresql.conf
 
 # create a default user
