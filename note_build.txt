@@ -1,6 +1,6 @@
 mkdir build
 cd build
-../configure --prefix=$PWD
+../configure --prefix=$PWD --enable-debug
 sudo make -j 12
 sudo make install
 
@@ -44,3 +44,13 @@ https://zhuanlan.zhihu.com/p/591360747
 ---
 sudo lsof -i :5432
 kill -9 pid
+
+20230118
+
+Debug: https://www.cnblogs.com/flying-tiger/p/5866660.html
+
+1. select pg_backend_pid();
+
+2. In Clion, Run-Attack to Process, then press debug
+    if FATAL: postermaster.pid already exists, "sudo lsof -i :5432; kill -9 pid"
+    and re-run. "./bin/pg_ctl -D ./data/ start; ./bin/psql postgres"
