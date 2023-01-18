@@ -54,3 +54,12 @@ Debug: https://www.cnblogs.com/flying-tiger/p/5866660.html
 2. In Clion, Run-Attack to Process, then press debug
     if FATAL: postermaster.pid already exists, "sudo lsof -i :5432; kill -9 pid"
     and re-run. "./bin/pg_ctl -D ./data/ start; ./bin/psql postgres"
+
+---
+Debug using gdb: bt: backtracing
+
+    0. export CFLAGS="-g -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Wendif-labels -Wformat-security -fno-strict-aliasing -fwrapv"
+    1. sudo apt-get install systemtap-sdt-dev
+    2. sudo apt-get install libpam0g-dev
+    3. sudo apt-get install -y libperl-dev
+    4. ../configure --prefix=$PWD --with-perl --with-tcl --with-python --with-openssl --with-pam --without-ldap --with-libxml --with-libxslt --enable-thread-safety --with-wal-blocksize=16 --with-blocksize=16 --enable-dtrace --enable-debug
