@@ -1,3 +1,5 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 node_support_input_i = [
   'nodes/nodes.h',
   'nodes/primnodes.h',
@@ -16,6 +18,7 @@ node_support_input_i = [
   'nodes/bitmapset.h',
   'nodes/extensible.h',
   'nodes/lockoptions.h',
+  'nodes/miscnodes.h',
   'nodes/replnodes.h',
   'nodes/supportnodes.h',
   'nodes/value.h',

@@ -1,5 +1,6 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 common_sources = files(
-  'archive.c',
   'base64.c',
   'checksum_helper.c',
   'compression.c',
@@ -15,6 +16,7 @@ common_sources = files(
   'kwlookup.c',
   'link-canary.c',
   'md5_common.c',
+  'percentrepl.c',
   'pg_get_line.c',
   'pg_lzcompress.c',
   'pg_prng.c',
@@ -64,9 +66,7 @@ ryu_sources = files(
 )
 ryu_cflags = []
 
-if using_declaration_after_statement_warning
-  ryu_cflags += ['-Wno-declaration-after-statement']
-endif
+ryu_cflags += cflags_no_decl_after_statement
 
 config_info_sources = files('config_info.c',)
 config_info_cflags = [

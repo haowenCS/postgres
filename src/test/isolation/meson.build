@@ -1,3 +1,5 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 # pg_regress_c helpfully provided by regress/meson.build
 
 isolation_sources = pg_regress_c + files(
@@ -67,5 +69,6 @@ tests += {
       'priority': 40,
       'timeout': 1000,
     },
+    'dbname': 'isolation_regression',
   },
 }

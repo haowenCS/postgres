@@ -6,7 +6,7 @@
  * This module deals with SubLinks and CTEs, but not subquery RTEs (i.e.,
  * not sub-SELECT-in-FROM cases).
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -1496,8 +1496,12 @@ convert_EXISTS_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	if (!bms_is_subset(upper_varnos, available_rels))
 		return NULL;
 
-	/* Now we can attach the modified subquery rtable to the parent */
-	parse->rtable = list_concat(parse->rtable, subselect->rtable);
+	/*
+	 * Now we can attach the modified subquery rtable to the parent. This also
+	 * adds subquery's RTEPermissionInfos into the upper query.
+	 */
+	CombineRangeTables(&parse->rtable, &parse->rteperminfos,
+					   subselect->rtable, subselect->rteperminfos);
 
 	/*
 	 * And finally, build the JoinExpr node.

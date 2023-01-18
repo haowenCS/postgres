@@ -4,7 +4,7 @@
  *	  pg_dump is a utility for dumping out a postgres database
  *	  into a script file.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *	pg_dump will read the system catalogs in a database and dump out a
@@ -104,6 +104,8 @@ static Oid	g_last_builtin_oid; /* value of the last builtin oid */
 
 /* The specified names/patterns should to match at least one entity */
 static int	strict_names = 0;
+
+static pg_compress_algorithm compression_algorithm = PG_COMPRESSION_NONE;
 
 /*
  * Object inclusion/exclusion lists
@@ -281,9 +283,9 @@ static char *convertRegProcReference(const char *proc);
 static char *getFormattedOperatorName(const char *oproid);
 static char *convertTSFunction(Archive *fout, Oid funcOid);
 static const char *getFormattedTypeName(Archive *fout, Oid oid, OidOptions opts);
-static void getBlobs(Archive *fout);
-static void dumpBlob(Archive *fout, const BlobInfo *binfo);
-static int	dumpBlobs(Archive *fout, const void *arg);
+static void getLOs(Archive *fout);
+static void dumpLO(Archive *fout, const LoInfo *binfo);
+static int	dumpLOs(Archive *fout, const void *arg);
 static void dumpPolicy(Archive *fout, const PolicyInfo *polinfo);
 static void dumpPublication(Archive *fout, const PublicationInfo *pubinfo);
 static void dumpPublicationTable(Archive *fout, const PublicationRelInfo *pubrinfo);
@@ -340,17 +342,23 @@ main(int argc, char **argv)
 	const char *dumpsnapshot = NULL;
 	char	   *use_role = NULL;
 	int			numWorkers = 1;
-	int			compressLevel = -1;
 	int			plainText = 0;
 	ArchiveFormat archiveFormat = archUnknown;
 	ArchiveMode archiveMode;
+	pg_compress_specification compression_spec = {0};
+	char	   *compression_detail = NULL;
+	char	   *compression_algorithm_str = "none";
+	char	   *error_detail = NULL;
+	bool		user_compression_defined = false;
 
 	static DumpOptions dopt;
 
 	static struct option long_options[] = {
 		{"data-only", no_argument, NULL, 'a'},
 		{"blobs", no_argument, NULL, 'b'},
+		{"large-objects", no_argument, NULL, 'b'},
 		{"no-blobs", no_argument, NULL, 'B'},
+		{"no-large-objects", no_argument, NULL, 'B'},
 		{"clean", no_argument, NULL, 'c'},
 		{"create", no_argument, NULL, 'C'},
 		{"dbname", required_argument, NULL, 'd'},
@@ -454,12 +462,12 @@ main(int argc, char **argv)
 				dopt.dataOnly = true;
 				break;
 
-			case 'b':			/* Dump blobs */
-				dopt.outputBlobs = true;
+			case 'b':			/* Dump LOs */
+				dopt.outputLOs = true;
 				break;
 
-			case 'B':			/* Don't dump blobs */
-				dopt.dontOutputBlobs = true;
+			case 'B':			/* Don't dump LOs */
+				dopt.dontOutputLOs = true;
 				break;
 
 			case 'c':			/* clean (i.e., drop) schema prior to create */
@@ -561,10 +569,10 @@ main(int argc, char **argv)
 				dopt.aclsSkip = true;
 				break;
 
-			case 'Z':			/* Compression Level */
-				if (!option_parse_int(optarg, "-Z/--compress", 0, 9,
-									  &compressLevel))
-					exit_nicely(1);
+			case 'Z':			/* Compression */
+				parse_compress_options(optarg, &compression_algorithm_str,
+									   &compression_detail);
+				user_compression_defined = true;
 				break;
 
 			case 0:
@@ -687,22 +695,49 @@ main(int argc, char **argv)
 	if (archiveFormat == archNull)
 		plainText = 1;
 
-	/* Custom and directory formats are compressed by default, others not */
-	if (compressLevel == -1)
+	/*
+	 * Compression options
+	 */
+	if (!parse_compress_algorithm(compression_algorithm_str,
+								  &compression_algorithm))
+		pg_fatal("unrecognized compression algorithm: \"%s\"",
+				 compression_algorithm_str);
+
+	parse_compress_specification(compression_algorithm, compression_detail,
+								 &compression_spec);
+	error_detail = validate_compress_specification(&compression_spec);
+	if (error_detail != NULL)
+		pg_fatal("invalid compression specification: %s",
+				 error_detail);
+
+	switch (compression_algorithm)
 	{
-#ifdef HAVE_LIBZ
-		if (archiveFormat == archCustom || archiveFormat == archDirectory)
-			compressLevel = Z_DEFAULT_COMPRESSION;
-		else
-#endif
-			compressLevel = 0;
+		case PG_COMPRESSION_NONE:
+			/* fallthrough */
+		case PG_COMPRESSION_GZIP:
+			break;
+		case PG_COMPRESSION_ZSTD:
+			pg_fatal("compression with %s is not yet supported", "ZSTD");
+			break;
+		case PG_COMPRESSION_LZ4:
+			pg_fatal("compression with %s is not yet supported", "LZ4");
+			break;
 	}
 
-#ifndef HAVE_LIBZ
-	if (compressLevel != 0)
-		pg_log_warning("requested compression not available in this installation -- archive will be uncompressed");
-	compressLevel = 0;
+	/*
+	 * Custom and directory formats are compressed by default with gzip when
+	 * available, not the others.
+	 */
+	if ((archiveFormat == archCustom || archiveFormat == archDirectory) &&
+		!user_compression_defined)
+	{
+#ifdef HAVE_LIBZ
+		parse_compress_specification(PG_COMPRESSION_GZIP, NULL,
+									 &compression_spec);
+#else
+		/* Nothing to do in the default case */
 #endif
+	}
 
 	/*
 	 * If emitting an archive format, we always want to emit a DATABASE item,
@@ -716,8 +751,8 @@ main(int argc, char **argv)
 		pg_fatal("parallel backup only supported by the directory format");
 
 	/* Open the output file */
-	fout = CreateArchive(filename, archiveFormat, compressLevel, dosync,
-						 archiveMode, setupDumpWorker);
+	fout = CreateArchive(filename, archiveFormat, compression_spec,
+						 dosync, archiveMode, setupDumpWorker);
 
 	/* Make dump options accessible right away */
 	SetArchiveOptions(fout, &dopt, NULL);
@@ -808,16 +843,16 @@ main(int argc, char **argv)
 	}
 
 	/*
-	 * Dumping blobs is the default for dumps where an inclusion switch is not
-	 * used (an "include everything" dump).  -B can be used to exclude blobs
-	 * from those dumps.  -b can be used to include blobs even when an
+	 * Dumping LOs is the default for dumps where an inclusion switch is not
+	 * used (an "include everything" dump).  -B can be used to exclude LOs
+	 * from those dumps.  -b can be used to include LOs even when an
 	 * inclusion switch is used.
 	 *
-	 * -s means "schema only" and blobs are data, not schema, so we never
-	 * include blobs when -s is used.
+	 * -s means "schema only" and LOs are data, not schema, so we never
+	 * include LOs when -s is used.
 	 */
-	if (dopt.include_everything && !dopt.schemaOnly && !dopt.dontOutputBlobs)
-		dopt.outputBlobs = true;
+	if (dopt.include_everything && !dopt.schemaOnly && !dopt.dontOutputLOs)
+		dopt.outputLOs = true;
 
 	/*
 	 * Collect role names so we can map object owner OIDs to names.
@@ -842,15 +877,15 @@ main(int argc, char **argv)
 		getTableData(&dopt, tblinfo, numTables, RELKIND_SEQUENCE);
 
 	/*
-	 * In binary-upgrade mode, we do not have to worry about the actual blob
+	 * In binary-upgrade mode, we do not have to worry about the actual LO
 	 * data or the associated metadata that resides in the pg_largeobject and
 	 * pg_largeobject_metadata tables, respectively.
 	 *
-	 * However, we do need to collect blob information as there may be
-	 * comments or other information on blobs that we do need to dump out.
+	 * However, we do need to collect LO information as there may be
+	 * comments or other information on LOs that we do need to dump out.
 	 */
-	if (dopt.outputBlobs || dopt.binary_upgrade)
-		getBlobs(fout);
+	if (dopt.outputLOs || dopt.binary_upgrade)
+		getLOs(fout);
 
 	/*
 	 * Collect dependency data to assist in ordering the objects.
@@ -948,10 +983,7 @@ main(int argc, char **argv)
 	ropt->sequence_data = dopt.sequence_data;
 	ropt->binary_upgrade = dopt.binary_upgrade;
 
-	if (compressLevel == -1)
-		ropt->compression = 0;
-	else
-		ropt->compression = compressLevel;
+	ropt->compression_spec = compression_spec;
 
 	ropt->suppressDumpWarnings = true;	/* We've already shown them */
 
@@ -998,15 +1030,18 @@ help(const char *progname)
 	printf(_("  -j, --jobs=NUM               use this many parallel jobs to dump\n"));
 	printf(_("  -v, --verbose                verbose mode\n"));
 	printf(_("  -V, --version                output version information, then exit\n"));
-	printf(_("  -Z, --compress=0-9           compression level for compressed formats\n"));
+	printf(_("  -Z, --compress=METHOD[:LEVEL]\n"
+			 "                               compress as specified\n"));
 	printf(_("  --lock-wait-timeout=TIMEOUT  fail after waiting TIMEOUT for a table lock\n"));
 	printf(_("  --no-sync                    do not wait for changes to be written safely to disk\n"));
 	printf(_("  -?, --help                   show this help, then exit\n"));
 
 	printf(_("\nOptions controlling the output content:\n"));
 	printf(_("  -a, --data-only              dump only the data, not the schema\n"));
-	printf(_("  -b, --blobs                  include large objects in dump\n"));
-	printf(_("  -B, --no-blobs               exclude large objects in dump\n"));
+	printf(_("  -b, --large-objects, --blobs\n"
+			 "                               include large objects in dump\n"));
+	printf(_("  -B, --no-large-objects, --no-blobs\n"
+			 "                               exclude large objects in dump\n"));
 	printf(_("  -c, --clean                  clean (drop) database objects before recreating\n"));
 	printf(_("  -C, --create                 include commands to create database in dump\n"));
 	printf(_("  -e, --extension=PATTERN      dump the specified extension(s) only\n"));
@@ -3235,32 +3270,49 @@ dumpDatabaseConfig(Archive *AH, PQExpBuffer outbuf,
 	PGresult   *res;
 
 	/* First collect database-specific options */
-	printfPQExpBuffer(buf, "SELECT unnest(setconfig) FROM pg_db_role_setting "
+	printfPQExpBuffer(buf, "SELECT unnest(setconfig)");
+	if (AH->remoteVersion >= 160000)
+		appendPQExpBufferStr(buf, ", unnest(setuser)");
+	appendPQExpBuffer(buf, " FROM pg_db_role_setting "
 					  "WHERE setrole = 0 AND setdatabase = '%u'::oid",
 					  dboid);
 
 	res = ExecuteSqlQuery(AH, buf->data, PGRES_TUPLES_OK);
 
 	for (int i = 0; i < PQntuples(res); i++)
-		makeAlterConfigCommand(conn, PQgetvalue(res, i, 0),
+	{
+		char	   *userset = NULL;
+
+		if (AH->remoteVersion >= 160000)
+			userset = PQgetvalue(res, i, 1);
+		makeAlterConfigCommand(conn, PQgetvalue(res, i, 0), userset,
 							   "DATABASE", dbname, NULL, NULL,
 							   outbuf);
+	}
 
 	PQclear(res);
 
 	/* Now look for role-and-database-specific options */
-	printfPQExpBuffer(buf, "SELECT rolname, unnest(setconfig) "
-					  "FROM pg_db_role_setting s, pg_roles r "
+	printfPQExpBuffer(buf, "SELECT rolname, unnest(setconfig)");
+	if (AH->remoteVersion >= 160000)
+		appendPQExpBufferStr(buf, ", unnest(setuser)");
+	appendPQExpBuffer(buf, " FROM pg_db_role_setting s, pg_roles r "
 					  "WHERE setrole = r.oid AND setdatabase = '%u'::oid",
 					  dboid);
 
 	res = ExecuteSqlQuery(AH, buf->data, PGRES_TUPLES_OK);
 
 	for (int i = 0; i < PQntuples(res); i++)
-		makeAlterConfigCommand(conn, PQgetvalue(res, i, 1),
+	{
+		char	   *userset = NULL;
+
+		if (AH->remoteVersion >= 160000)
+			userset = PQgetvalue(res, i, 2);
+		makeAlterConfigCommand(conn, PQgetvalue(res, i, 1), userset,
 							   "ROLE", PQgetvalue(res, i, 0),
 							   "DATABASE", dbname,
 							   outbuf);
+	}
 
 	PQclear(res);
 
@@ -3378,16 +3430,16 @@ dumpSearchPath(Archive *AH)
 
 
 /*
- * getBlobs:
+ * getLOs:
  *	Collect schema-level data about large objects
  */
 static void
-getBlobs(Archive *fout)
+getLOs(Archive *fout)
 {
 	DumpOptions *dopt = fout->dopt;
-	PQExpBuffer blobQry = createPQExpBuffer();
-	BlobInfo   *binfo;
-	DumpableObject *bdata;
+	PQExpBuffer loQry = createPQExpBuffer();
+	LoInfo	   *loinfo;
+	DumpableObject *lodata;
 	PGresult   *res;
 	int			ntups;
 	int			i;
@@ -3398,13 +3450,13 @@ getBlobs(Archive *fout)
 
 	pg_log_info("reading large objects");
 
-	/* Fetch BLOB OIDs, and owner/ACL data */
-	appendPQExpBufferStr(blobQry,
+	/* Fetch LO OIDs, and owner/ACL data */
+	appendPQExpBufferStr(loQry,
 						 "SELECT oid, lomowner, lomacl, "
 						 "acldefault('L', lomowner) AS acldefault "
 						 "FROM pg_largeobject_metadata");
 
-	res = ExecuteSqlQuery(fout, blobQry->data, PGRES_TUPLES_OK);
+	res = ExecuteSqlQuery(fout, loQry->data, PGRES_TUPLES_OK);
 
 	i_oid = PQfnumber(res, "oid");
 	i_lomowner = PQfnumber(res, "lomowner");
@@ -3414,40 +3466,40 @@ getBlobs(Archive *fout)
 	ntups = PQntuples(res);
 
 	/*
-	 * Each large object has its own BLOB archive entry.
+	 * Each large object has its own "BLOB" archive entry.
 	 */
-	binfo = (BlobInfo *) pg_malloc(ntups * sizeof(BlobInfo));
+	loinfo = (LoInfo *) pg_malloc(ntups * sizeof(LoInfo));
 
 	for (i = 0; i < ntups; i++)
 	{
-		binfo[i].dobj.objType = DO_BLOB;
-		binfo[i].dobj.catId.tableoid = LargeObjectRelationId;
-		binfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
-		AssignDumpId(&binfo[i].dobj);
+		loinfo[i].dobj.objType = DO_LARGE_OBJECT;
+		loinfo[i].dobj.catId.tableoid = LargeObjectRelationId;
+		loinfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&loinfo[i].dobj);
 
-		binfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_oid));
-		binfo[i].dacl.acl = pg_strdup(PQgetvalue(res, i, i_lomacl));
-		binfo[i].dacl.acldefault = pg_strdup(PQgetvalue(res, i, i_acldefault));
-		binfo[i].dacl.privtype = 0;
-		binfo[i].dacl.initprivs = NULL;
-		binfo[i].rolname = getRoleName(PQgetvalue(res, i, i_lomowner));
+		loinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_oid));
+		loinfo[i].dacl.acl = pg_strdup(PQgetvalue(res, i, i_lomacl));
+		loinfo[i].dacl.acldefault = pg_strdup(PQgetvalue(res, i, i_acldefault));
+		loinfo[i].dacl.privtype = 0;
+		loinfo[i].dacl.initprivs = NULL;
+		loinfo[i].rolname = getRoleName(PQgetvalue(res, i, i_lomowner));
 
-		/* Blobs have data */
-		binfo[i].dobj.components |= DUMP_COMPONENT_DATA;
+		/* LOs have data */
+		loinfo[i].dobj.components |= DUMP_COMPONENT_DATA;
 
-		/* Mark whether blob has an ACL */
+		/* Mark whether LO has an ACL */
 		if (!PQgetisnull(res, i, i_lomacl))
-			binfo[i].dobj.components |= DUMP_COMPONENT_ACL;
+			loinfo[i].dobj.components |= DUMP_COMPONENT_ACL;
 
 		/*
-		 * In binary-upgrade mode for blobs, we do *not* dump out the blob
+		 * In binary-upgrade mode for LOs, we do *not* dump out the LO
 		 * data, as it will be copied by pg_upgrade, which simply copies the
 		 * pg_largeobject table. We *do* however dump out anything but the
 		 * data, as pg_upgrade copies just pg_largeobject, but not
 		 * pg_largeobject_metadata, after the dump is restored.
 		 */
 		if (dopt->binary_upgrade)
-			binfo[i].dobj.dump &= ~DUMP_COMPONENT_DATA;
+			loinfo[i].dobj.dump &= ~DUMP_COMPONENT_DATA;
 	}
 
 	/*
@@ -3456,77 +3508,77 @@ getBlobs(Archive *fout)
 	 */
 	if (ntups > 0)
 	{
-		bdata = (DumpableObject *) pg_malloc(sizeof(DumpableObject));
-		bdata->objType = DO_BLOB_DATA;
-		bdata->catId = nilCatalogId;
-		AssignDumpId(bdata);
-		bdata->name = pg_strdup("BLOBS");
-		bdata->components |= DUMP_COMPONENT_DATA;
+		lodata = (DumpableObject *) pg_malloc(sizeof(DumpableObject));
+		lodata->objType = DO_LARGE_OBJECT_DATA;
+		lodata->catId = nilCatalogId;
+		AssignDumpId(lodata);
+		lodata->name = pg_strdup("BLOBS");
+		lodata->components |= DUMP_COMPONENT_DATA;
 	}
 
 	PQclear(res);
-	destroyPQExpBuffer(blobQry);
+	destroyPQExpBuffer(loQry);
 }
 
 /*
- * dumpBlob
+ * dumpLO
  *
  * dump the definition (metadata) of the given large object
  */
 static void
-dumpBlob(Archive *fout, const BlobInfo *binfo)
+dumpLO(Archive *fout, const LoInfo *loinfo)
 {
 	PQExpBuffer cquery = createPQExpBuffer();
 	PQExpBuffer dquery = createPQExpBuffer();
 
 	appendPQExpBuffer(cquery,
 					  "SELECT pg_catalog.lo_create('%s');\n",
-					  binfo->dobj.name);
+					  loinfo->dobj.name);
 
 	appendPQExpBuffer(dquery,
 					  "SELECT pg_catalog.lo_unlink('%s');\n",
-					  binfo->dobj.name);
+					  loinfo->dobj.name);
 
-	if (binfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
-		ArchiveEntry(fout, binfo->dobj.catId, binfo->dobj.dumpId,
-					 ARCHIVE_OPTS(.tag = binfo->dobj.name,
-								  .owner = binfo->rolname,
+	if (loinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
+		ArchiveEntry(fout, loinfo->dobj.catId, loinfo->dobj.dumpId,
+					 ARCHIVE_OPTS(.tag = loinfo->dobj.name,
+								  .owner = loinfo->rolname,
 								  .description = "BLOB",
 								  .section = SECTION_PRE_DATA,
 								  .createStmt = cquery->data,
 								  .dropStmt = dquery->data));
 
 	/* Dump comment if any */
-	if (binfo->dobj.dump & DUMP_COMPONENT_COMMENT)
-		dumpComment(fout, "LARGE OBJECT", binfo->dobj.name,
-					NULL, binfo->rolname,
-					binfo->dobj.catId, 0, binfo->dobj.dumpId);
+	if (loinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+		dumpComment(fout, "LARGE OBJECT", loinfo->dobj.name,
+					NULL, loinfo->rolname,
+					loinfo->dobj.catId, 0, loinfo->dobj.dumpId);
 
 	/* Dump security label if any */
-	if (binfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
-		dumpSecLabel(fout, "LARGE OBJECT", binfo->dobj.name,
-					 NULL, binfo->rolname,
-					 binfo->dobj.catId, 0, binfo->dobj.dumpId);
+	if (loinfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
+		dumpSecLabel(fout, "LARGE OBJECT", loinfo->dobj.name,
+					 NULL, loinfo->rolname,
+					 loinfo->dobj.catId, 0, loinfo->dobj.dumpId);
 
 	/* Dump ACL if any */
-	if (binfo->dobj.dump & DUMP_COMPONENT_ACL)
-		dumpACL(fout, binfo->dobj.dumpId, InvalidDumpId, "LARGE OBJECT",
-				binfo->dobj.name, NULL,
-				NULL, binfo->rolname, &binfo->dacl);
+	if (loinfo->dobj.dump & DUMP_COMPONENT_ACL)
+		dumpACL(fout, loinfo->dobj.dumpId, InvalidDumpId, "LARGE OBJECT",
+				loinfo->dobj.name, NULL,
+				NULL, loinfo->rolname, &loinfo->dacl);
 
 	destroyPQExpBuffer(cquery);
 	destroyPQExpBuffer(dquery);
 }
 
 /*
- * dumpBlobs:
+ * dumpLOs:
  *	dump the data contents of all large objects
  */
 static int
-dumpBlobs(Archive *fout, const void *arg)
+dumpLOs(Archive *fout, const void *arg)
 {
-	const char *blobQry;
-	const char *blobFetchQry;
+	const char *loQry;
+	const char *loFetchQry;
 	PGconn	   *conn = GetConnection(fout);
 	PGresult   *res;
 	char		buf[LOBBUFSIZE];
@@ -3537,38 +3589,38 @@ dumpBlobs(Archive *fout, const void *arg)
 	pg_log_info("saving large objects");
 
 	/*
-	 * Currently, we re-fetch all BLOB OIDs using a cursor.  Consider scanning
+	 * Currently, we re-fetch all LO OIDs using a cursor.  Consider scanning
 	 * the already-in-memory dumpable objects instead...
 	 */
-	blobQry =
-		"DECLARE bloboid CURSOR FOR "
+	loQry =
+		"DECLARE looid CURSOR FOR "
 		"SELECT oid FROM pg_largeobject_metadata ORDER BY 1";
 
-	ExecuteSqlStatement(fout, blobQry);
+	ExecuteSqlStatement(fout, loQry);
 
 	/* Command to fetch from cursor */
-	blobFetchQry = "FETCH 1000 IN bloboid";
+	loFetchQry = "FETCH 1000 IN looid";
 
 	do
 	{
 		/* Do a fetch */
-		res = ExecuteSqlQuery(fout, blobFetchQry, PGRES_TUPLES_OK);
+		res = ExecuteSqlQuery(fout, loFetchQry, PGRES_TUPLES_OK);
 
 		/* Process the tuples, if any */
 		ntups = PQntuples(res);
 		for (i = 0; i < ntups; i++)
 		{
-			Oid			blobOid;
+			Oid			loOid;
 			int			loFd;
 
-			blobOid = atooid(PQgetvalue(res, i, 0));
-			/* Open the BLOB */
-			loFd = lo_open(conn, blobOid, INV_READ);
+			loOid = atooid(PQgetvalue(res, i, 0));
+			/* Open the LO */
+			loFd = lo_open(conn, loOid, INV_READ);
 			if (loFd == -1)
 				pg_fatal("could not open large object %u: %s",
-						 blobOid, PQerrorMessage(conn));
+						 loOid, PQerrorMessage(conn));
 
-			StartBlob(fout, blobOid);
+			StartLO(fout, loOid);
 
 			/* Now read it in chunks, sending data to archive */
 			do
@@ -3576,14 +3628,14 @@ dumpBlobs(Archive *fout, const void *arg)
 				cnt = lo_read(conn, loFd, buf, LOBBUFSIZE);
 				if (cnt < 0)
 					pg_fatal("error reading large object %u: %s",
-							 blobOid, PQerrorMessage(conn));
+							 loOid, PQerrorMessage(conn));
 
 				WriteData(fout, buf, cnt);
 			} while (cnt > 0);
 
 			lo_close(conn, loFd);
 
-			EndBlob(fout, blobOid);
+			EndLO(fout, loOid);
 		}
 
 		PQclear(res);
@@ -4481,7 +4533,7 @@ getSubscriptions(Archive *fout)
 	if (fout->remoteVersion >= 140000)
 		appendPQExpBufferStr(query, " s.substream,\n");
 	else
-		appendPQExpBufferStr(query, " false AS substream,\n");
+		appendPQExpBufferStr(query, " 'f' AS substream,\n");
 
 	if (fout->remoteVersion >= 150000)
 		appendPQExpBufferStr(query,
@@ -4618,8 +4670,10 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 	if (strcmp(subinfo->subbinary, "t") == 0)
 		appendPQExpBufferStr(query, ", binary = true");
 
-	if (strcmp(subinfo->substream, "f") != 0)
+	if (strcmp(subinfo->substream, "t") == 0)
 		appendPQExpBufferStr(query, ", streaming = on");
+	else if (strcmp(subinfo->substream, "p") == 0)
+		appendPQExpBufferStr(query, ", streaming = parallel");
 
 	if (strcmp(subinfo->subtwophasestate, two_phase_disabled) != 0)
 		appendPQExpBufferStr(query, ", two_phase = on");
@@ -6418,6 +6472,8 @@ getTables(Archive *fout, int *numTables)
 		ExecuteSqlStatement(fout, query->data);
 	}
 
+	resetPQExpBuffer(query);
+
 	for (i = 0; i < ntups; i++)
 	{
 		tblinfo[i].dobj.objType = DO_TABLE;
@@ -6535,12 +6591,36 @@ getTables(Archive *fout, int *numTables)
 			(tblinfo[i].relkind == RELKIND_RELATION ||
 			 tblinfo[i].relkind == RELKIND_PARTITIONED_TABLE))
 		{
-			resetPQExpBuffer(query);
-			appendPQExpBuffer(query,
-							  "LOCK TABLE %s IN ACCESS SHARE MODE",
-							  fmtQualifiedDumpable(&tblinfo[i]));
-			ExecuteSqlStatement(fout, query->data);
+			/*
+			 * Tables are locked in batches.  When dumping from a remote
+			 * server this can save a significant amount of time by reducing
+			 * the number of round trips.
+			 */
+			if (query->len == 0)
+				appendPQExpBuffer(query, "LOCK TABLE %s",
+								  fmtQualifiedDumpable(&tblinfo[i]));
+			else
+			{
+				appendPQExpBuffer(query, ", %s",
+								  fmtQualifiedDumpable(&tblinfo[i]));
+
+				/* Arbitrarily end a batch when query length reaches 100K. */
+				if (query->len >= 100000)
+				{
+					/* Lock another batch of tables. */
+					appendPQExpBufferStr(query, " IN ACCESS SHARE MODE");
+					ExecuteSqlStatement(fout, query->data);
+					resetPQExpBuffer(query);
+				}
+			}
 		}
+	}
+
+	if (query->len != 0)
+	{
+		/* Lock the tables in the last batch. */
+		appendPQExpBufferStr(query, " IN ACCESS SHARE MODE");
+		ExecuteSqlStatement(fout, query->data);
 	}
 
 	if (dopt->lockWaitTimeout)
@@ -8449,17 +8529,11 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			{
 				/*
 				 * Column generation expressions cannot be dumped separately,
-				 * because there is no syntax for it.  The !shouldPrintColumn
-				 * case below will be tempted to set them to separate if they
-				 * are attached to an inherited column without a local
-				 * definition, but that would be wrong and unnecessary,
-				 * because generation expressions are always inherited, so
-				 * there is no need to set them again in child tables, and
-				 * there is no syntax for it either.  By setting separate to
+				 * because there is no syntax for it.  By setting separate to
 				 * false here we prevent the "default" from being processed as
 				 * its own dumpable object, and flagInhAttrs() will remove it
-				 * from the table when it detects that it belongs to an
-				 * inherited column.
+				 * from the table if possible (that is, if it can be inherited
+				 * from a parent).
 				 */
 				attrdefs[j].separate = false;
 			}
@@ -9452,7 +9526,7 @@ dumpCommentExtended(Archive *fout, const char *type,
 	if (dopt->no_comments)
 		return;
 
-	/* Comments are schema not data ... except blob comments are data */
+	/* Comments are schema not data ... except LO comments are data */
 	if (strcmp(type, "LARGE OBJECT") != 0)
 	{
 		if (dopt->dataOnly)
@@ -9460,7 +9534,7 @@ dumpCommentExtended(Archive *fout, const char *type,
 	}
 	else
 	{
-		/* We do dump blob comments in binary-upgrade mode */
+		/* We do dump LO comments in binary-upgrade mode */
 		if (dopt->schemaOnly && !dopt->binary_upgrade)
 			return;
 	}
@@ -9940,10 +10014,10 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 		case DO_DEFAULT_ACL:
 			dumpDefaultACL(fout, (const DefaultACLInfo *) dobj);
 			break;
-		case DO_BLOB:
-			dumpBlob(fout, (const BlobInfo *) dobj);
+		case DO_LARGE_OBJECT:
+			dumpLO(fout, (const LoInfo *) dobj);
 			break;
-		case DO_BLOB_DATA:
+		case DO_LARGE_OBJECT_DATA:
 			if (dobj->dump & DUMP_COMPONENT_DATA)
 			{
 				TocEntry   *te;
@@ -9952,19 +10026,19 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 								  ARCHIVE_OPTS(.tag = dobj->name,
 											   .description = "BLOBS",
 											   .section = SECTION_DATA,
-											   .dumpFn = dumpBlobs));
+											   .dumpFn = dumpLOs));
 
 				/*
 				 * Set the TocEntry's dataLength in case we are doing a
 				 * parallel dump and want to order dump jobs by table size.
 				 * (We need some size estimate for every TocEntry with a
 				 * DataDumper function.)  We don't currently have any cheap
-				 * way to estimate the size of blobs, but it doesn't matter;
+				 * way to estimate the size of LOs, but it doesn't matter;
 				 * let's just set the size to a large value so parallel dumps
-				 * will launch this job first.  If there's lots of blobs, we
+				 * will launch this job first.  If there's lots of LOs, we
 				 * win, and if there aren't, we don't lose much.  (If you want
 				 * to improve on this, really what you should be thinking
-				 * about is allowing blob dumping to be parallelized, not just
+				 * about is allowing LO dumping to be parallelized, not just
 				 * getting a smarter estimate for the single TOC entry.)
 				 */
 				te->dataLength = INT_MAX;
@@ -14436,7 +14510,7 @@ dumpACL(Archive *fout, DumpId objDumpId, DumpId altDumpId,
 	if (dopt->aclsSkip)
 		return InvalidDumpId;
 
-	/* --data-only skips ACLs *except* BLOB ACLs */
+	/* --data-only skips ACLs *except* large object ACLs */
 	if (dopt->dataOnly && strcmp(type, "LARGE OBJECT") != 0)
 		return InvalidDumpId;
 
@@ -14558,7 +14632,7 @@ dumpSecLabel(Archive *fout, const char *type, const char *name,
 	if (dopt->no_security_labels)
 		return;
 
-	/* Security labels are schema not data ... except blob labels are data */
+	/* Security labels are schema not data ... except large object labels are data */
 	if (strcmp(type, "LARGE OBJECT") != 0)
 	{
 		if (dopt->dataOnly)
@@ -14566,7 +14640,7 @@ dumpSecLabel(Archive *fout, const char *type, const char *name,
 	}
 	else
 	{
-		/* We do dump blob security labels in binary-upgrade mode */
+		/* We do dump large object security labels in binary-upgrade mode */
 		if (dopt->schemaOnly && !dopt->binary_upgrade)
 			return;
 	}
@@ -15472,8 +15546,7 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		if (tbinfo->relkind == RELKIND_MATVIEW)
 			append_depends_on_extension(fout, q, &tbinfo->dobj,
 										"pg_catalog.pg_class",
-										tbinfo->relkind == RELKIND_MATVIEW ?
-										"MATERIALIZED VIEW" : "INDEX",
+										"MATERIALIZED VIEW",
 										qualrelname);
 
 		/*
@@ -17914,13 +17987,13 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_FDW:
 			case DO_FOREIGN_SERVER:
 			case DO_TRANSFORM:
-			case DO_BLOB:
+			case DO_LARGE_OBJECT:
 				/* Pre-data objects: must come before the pre-data boundary */
 				addObjectDependency(preDataBound, dobj->dumpId);
 				break;
 			case DO_TABLE_DATA:
 			case DO_SEQUENCE_SET:
-			case DO_BLOB_DATA:
+			case DO_LARGE_OBJECT_DATA:
 				/* Data objects: must come between the boundaries */
 				addObjectDependency(dobj, preDataBound->dumpId);
 				addObjectDependency(postDataBound, dobj->dumpId);

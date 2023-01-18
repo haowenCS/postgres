@@ -3,7 +3,7 @@
  * tsvector_op.c
  *	  operations over tsvector
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -647,7 +647,9 @@ tsvector_unnest(PG_FUNCTION_ARGS)
 						   INT2ARRAYOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "weights",
 						   TEXTARRAYOID, -1, 0);
-		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
+		if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+			elog(ERROR, "return type must be a row type");
+		funcctx->tuple_desc = tupdesc;
 
 		funcctx->user_fctx = PG_GETARG_TSVECTOR_COPY(0);
 
@@ -2302,14 +2304,9 @@ ts_setup_firstcall(FunctionCallInfo fcinfo, FuncCallContext *funcctx,
 		}
 	Assert(stat->stackpos <= stat->maxdepth);
 
-	tupdesc = CreateTemplateTupleDesc(3);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "word",
-					   TEXTOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "ndoc",
-					   INT4OID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "nentry",
-					   INT4OID, -1, 0);
-	funcctx->tuple_desc = BlessTupleDesc(tupdesc);
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+	funcctx->tuple_desc = tupdesc;
 	funcctx->attinmeta = TupleDescGetAttInMetadata(tupdesc);
 
 	MemoryContextSwitchTo(oldcontext);
@@ -2655,7 +2652,7 @@ tsvector_update_trigger(PG_FUNCTION_ARGS, bool config_column)
 	{
 		List	   *names;
 
-		names = stringToQualifiedNameList(trigger->tgargs[1]);
+		names = stringToQualifiedNameList(trigger->tgargs[1], NULL);
 		/* require a schema so that results are not search path dependent */
 		if (list_length(names) < 2)
 			ereport(ERROR,

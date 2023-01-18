@@ -1,3 +1,5 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 # also used by isolationtester and ecpg tests
 pg_regress_c = files('pg_regress.c')
 pg_regress_inc = include_directories('.')
@@ -12,6 +14,8 @@ regress_sources = pg_regress_c + files(
 host_tuple_cc = cc.get_id()
 if host_system == 'windows' and host_tuple_cc == 'gcc'
   host_tuple_cc = 'mingw'
+elif host_system == 'cygwin' and host_tuple_cc == 'gcc'
+  host_tuple_cc = 'cygwin'
 endif
 host_tuple = '@0@-@1@-@2@'.format(host_cpu, host_system, host_tuple_cc)
 
@@ -73,5 +77,6 @@ tests += {
       'priority': 50,
       'timeout': 1000,
     },
+    'dbname': 'regression',
   },
 }

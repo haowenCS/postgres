@@ -1,3 +1,5 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 # FIXME: prevent install during main install, but not during test :/
 
 test_worker_spi_sources = files(
@@ -30,6 +32,8 @@ tests += {
     'sql': [
       'worker_spi',
     ],
-    'regress_args': ['--temp-config', files('dynamic.conf'), '--dbname=contrib_regression'],
+    'dbname': 'contrib_regression',
+    'regress_args': ['--temp-config', files('dynamic.conf')],
+    'runningcheck': false,
   },
 }

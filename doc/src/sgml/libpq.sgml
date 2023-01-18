@@ -878,7 +878,7 @@ PQsslKeyPassHook_OpenSSL_type PQgetSSLKeyPassHook_OpenSSL(void);
     as further described below.
    </para>
 
-   <sect3>
+   <sect3 id="libpq-connstring-keyword-value">
     <title>Keyword/Value Connection Strings</title>
 
    <para>
@@ -906,7 +906,7 @@ host=localhost port=5432 dbname=mydb connect_timeout=10
    </para>
    </sect3>
 
-   <sect3>
+   <sect3 id="libpq-connstring-uris">
     <title>Connection URIs</title>
 
    <para>
@@ -5055,10 +5055,11 @@ int PQflush(PGconn *conn);
   </para>
 
   <para>
-   While the pipeline API was introduced in
+   While <application>libpq</application>'s pipeline API was introduced in
    <productname>PostgreSQL</productname> 14, it is a client-side feature
    which doesn't require special server support and works on any server
-   that supports the v3 extended query protocol.
+   that supports the v3 extended query protocol.  For more information see
+   <xref linkend="protocol-flow-pipelining"/>.
   </para>
 
   <sect2 id="libpq-pipeline-using">

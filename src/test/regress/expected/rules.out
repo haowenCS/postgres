@@ -1446,7 +1446,7 @@ pg_publication_tables| SELECT p.pubname,
     c.relname AS tablename,
     ( SELECT array_agg(a.attname ORDER BY a.attnum) AS array_agg
            FROM pg_attribute a
-          WHERE ((a.attrelid = gpt.relid) AND (a.attnum > 0) AND (NOT a.attisdropped) AND ((a.attnum = ANY ((gpt.attrs)::smallint[])) OR (gpt.attrs IS NULL)))) AS attnames,
+          WHERE ((a.attrelid = gpt.relid) AND (a.attnum = ANY ((gpt.attrs)::smallint[])))) AS attnames,
     pg_get_expr(gpt.qual, gpt.relid) AS rowfilter
    FROM pg_publication p,
     LATERAL pg_get_publication_tables((p.pubname)::text) gpt(relid, attrs, qual),
@@ -2094,6 +2094,7 @@ pg_stat_ssl| SELECT s.pid,
 pg_stat_subscription| SELECT su.oid AS subid,
     su.subname,
     st.pid,
+    st.leader_pid,
     st.relid,
     st.received_lsn,
     st.last_msg_send_time,
@@ -2101,7 +2102,7 @@ pg_stat_subscription| SELECT su.oid AS subid,
     st.latest_end_lsn,
     st.latest_end_time
    FROM (pg_subscription su
-     LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
+     LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, leader_pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
 pg_stat_subscription_stats| SELECT ss.subid,
     s.subname,
     ss.apply_error_count,
@@ -2707,54 +2708,26 @@ ERROR:  cannot drop rule _RETURN on view rules_fooview because view rules_foovie
 HINT:  You can drop view rules_fooview instead.
 drop view rules_fooview;
 --
--- test conversion of table to view (needed to load some pg_dump files)
+-- We used to allow converting a table to a view by creating a "_RETURN"
+-- rule for it, but no more.
 --
 create table rules_fooview (x int, y text);
-select xmin, * from rules_fooview;
- xmin | x | y 
-------+---+---
-(0 rows)
-
 create rule "_RETURN" as on select to rules_fooview do instead
   select 1 as x, 'aaa'::text as y;
-select * from rules_fooview;
- x |  y  
----+-----
- 1 | aaa
-(1 row)
-
-select xmin, * from rules_fooview;  -- fail, views don't have such a column
-ERROR:  column "xmin" does not exist
-LINE 1: select xmin, * from rules_fooview;
-               ^
-select reltoastrelid, relkind, relfrozenxid
-  from pg_class where oid = 'rules_fooview'::regclass;
- reltoastrelid | relkind | relfrozenxid 
----------------+---------+--------------
-             0 | v       |            0
-(1 row)
-
-drop view rules_fooview;
--- cannot convert an inheritance parent or child to a view, though
-create table rules_fooview (x int, y text);
-create table rules_fooview_child () inherits (rules_fooview);
-create rule "_RETURN" as on select to rules_fooview do instead
-  select 1 as x, 'aaa'::text as y;
-ERROR:  could not convert table "rules_fooview" to a view because it has child tables
-create rule "_RETURN" as on select to rules_fooview_child do instead
-  select 1 as x, 'aaa'::text as y;
-ERROR:  could not convert table "rules_fooview_child" to a view because it has parent tables
-drop table rules_fooview cascade;
-NOTICE:  drop cascades to table rules_fooview_child
+ERROR:  relation "rules_fooview" cannot have ON SELECT rules
+DETAIL:  This operation is not supported for tables.
+drop table rules_fooview;
 -- likewise, converting a partitioned table or partition to view is not allowed
 create table rules_fooview (x int, y text) partition by list (x);
 create rule "_RETURN" as on select to rules_fooview do instead
   select 1 as x, 'aaa'::text as y;
-ERROR:  cannot convert partitioned table "rules_fooview" to a view
+ERROR:  relation "rules_fooview" cannot have ON SELECT rules
+DETAIL:  This operation is not supported for partitioned tables.
 create table rules_fooview_part partition of rules_fooview for values in (1);
 create rule "_RETURN" as on select to rules_fooview_part do instead
   select 1 as x, 'aaa'::text as y;
-ERROR:  cannot convert partition "rules_fooview_part" to a view
+ERROR:  relation "rules_fooview_part" cannot have ON SELECT rules
+DETAIL:  This operation is not supported for tables.
 drop table rules_fooview;
 --
 -- check for planner problems with complex inherited UPDATES
@@ -2941,11 +2914,11 @@ select pg_get_viewdef('shoe'::regclass,0) as prettier;
 --
 -- check multi-row VALUES in rules
 --
-create table rules_src(f1 int, f2 int);
-create table rules_log(f1 int, f2 int, tag text);
+create table rules_src(f1 int, f2 int default 0);
+create table rules_log(f1 int, f2 int, tag text, id serial);
 insert into rules_src values(1,2), (11,12);
 create rule r1 as on update to rules_src do also
-  insert into rules_log values(old.*, 'old'), (new.*, 'new');
+  insert into rules_log values(old.*, 'old', default), (new.*, 'new', default);
 update rules_src set f2 = f2 + 1;
 update rules_src set f2 = f2 * 10;
 select * from rules_src;
@@ -2956,16 +2929,16 @@ select * from rules_src;
 (2 rows)
 
 select * from rules_log;
- f1 | f2  | tag 
-----+-----+-----
-  1 |   2 | old
-  1 |   3 | new
- 11 |  12 | old
- 11 |  13 | new
-  1 |   3 | old
-  1 |  30 | new
- 11 |  13 | old
- 11 | 130 | new
+ f1 | f2  | tag | id 
+----+-----+-----+----
+  1 |   2 | old |  1
+  1 |   3 | new |  2
+ 11 |  12 | old |  3
+ 11 |  13 | new |  4
+  1 |   3 | old |  5
+  1 |  30 | new |  6
+ 11 |  13 | old |  7
+ 11 | 130 | new |  8
 (8 rows)
 
 create rule r2 as on update to rules_src do also
@@ -2979,71 +2952,84 @@ update rules_src set f2 = f2 / 10;
       11 |      13 | new
 (4 rows)
 
+create rule r3 as on insert to rules_src do also
+  insert into rules_log values(null, null, '-', default), (new.*, 'new', default);
+insert into rules_src values(22,23), (33,default);
 select * from rules_src;
  f1 | f2 
 ----+----
   1 |  3
  11 | 13
-(2 rows)
+ 22 | 23
+ 33 |  0
+(4 rows)
 
 select * from rules_log;
- f1 | f2  | tag 
-----+-----+-----
-  1 |   2 | old
-  1 |   3 | new
- 11 |  12 | old
- 11 |  13 | new
-  1 |   3 | old
-  1 |  30 | new
- 11 |  13 | old
- 11 | 130 | new
-  1 |  30 | old
-  1 |   3 | new
- 11 | 130 | old
- 11 |  13 | new
-(12 rows)
+ f1 | f2  | tag | id 
+----+-----+-----+----
+  1 |   2 | old |  1
+  1 |   3 | new |  2
+ 11 |  12 | old |  3
+ 11 |  13 | new |  4
+  1 |   3 | old |  5
+  1 |  30 | new |  6
+ 11 |  13 | old |  7
+ 11 | 130 | new |  8
+  1 |  30 | old |  9
+  1 |   3 | new | 10
+ 11 | 130 | old | 11
+ 11 |  13 | new | 12
+    |     | -   | 13
+ 22 |  23 | new | 14
+    |     | -   | 15
+ 33 |   0 | new | 16
+(16 rows)
 
-create rule r3 as on delete to rules_src do notify rules_src_deletion;
+create rule r4 as on delete to rules_src do notify rules_src_deletion;
 \d+ rules_src
                                  Table "public.rules_src"
  Column |  Type   | Collation | Nullable | Default | Storage | Stats target | Description 
 --------+---------+-----------+----------+---------+---------+--------------+-------------
  f1     | integer |           |          |         | plain   |              | 
- f2     | integer |           |          |         | plain   |              | 
+ f2     | integer |           |          | 0       | plain   |              | 
 Rules:
     r1 AS
-    ON UPDATE TO rules_src DO  INSERT INTO rules_log (f1, f2, tag) VALUES (old.f1,old.f2,'old'::text), (new.f1,new.f2,'new'::text)
+    ON UPDATE TO rules_src DO  INSERT INTO rules_log (f1, f2, tag, id) VALUES (old.f1,old.f2,'old'::text,DEFAULT), (new.f1,new.f2,'new'::text,DEFAULT)
     r2 AS
     ON UPDATE TO rules_src DO  VALUES (old.f1,old.f2,'old'::text), (new.f1,new.f2,'new'::text)
     r3 AS
+    ON INSERT TO rules_src DO  INSERT INTO rules_log (f1, f2, tag, id) VALUES (NULL::integer,NULL::integer,'-'::text,DEFAULT), (new.f1,new.f2,'new'::text,DEFAULT)
+    r4 AS
     ON DELETE TO rules_src DO
  NOTIFY rules_src_deletion
 
 --
 -- Ensure an aliased target relation for insert is correctly deparsed.
 --
-create rule r4 as on insert to rules_src do instead insert into rules_log AS trgt SELECT NEW.* RETURNING trgt.f1, trgt.f2;
-create rule r5 as on update to rules_src do instead UPDATE rules_log AS trgt SET tag = 'updated' WHERE trgt.f1 = new.f1;
+create rule r5 as on insert to rules_src do instead insert into rules_log AS trgt SELECT NEW.* RETURNING trgt.f1, trgt.f2;
+create rule r6 as on update to rules_src do instead UPDATE rules_log AS trgt SET tag = 'updated' WHERE trgt.f1 = new.f1;
 \d+ rules_src
                                  Table "public.rules_src"
  Column |  Type   | Collation | Nullable | Default | Storage | Stats target | Description 
 --------+---------+-----------+----------+---------+---------+--------------+-------------
  f1     | integer |           |          |         | plain   |              | 
- f2     | integer |           |          |         | plain   |              | 
+ f2     | integer |           |          | 0       | plain   |              | 
 Rules:
     r1 AS
-    ON UPDATE TO rules_src DO  INSERT INTO rules_log (f1, f2, tag) VALUES (old.f1,old.f2,'old'::text), (new.f1,new.f2,'new'::text)
+    ON UPDATE TO rules_src DO  INSERT INTO rules_log (f1, f2, tag, id) VALUES (old.f1,old.f2,'old'::text,DEFAULT), (new.f1,new.f2,'new'::text,DEFAULT)
     r2 AS
     ON UPDATE TO rules_src DO  VALUES (old.f1,old.f2,'old'::text), (new.f1,new.f2,'new'::text)
     r3 AS
+    ON INSERT TO rules_src DO  INSERT INTO rules_log (f1, f2, tag, id) VALUES (NULL::integer,NULL::integer,'-'::text,DEFAULT), (new.f1,new.f2,'new'::text,DEFAULT)
+    r4 AS
     ON DELETE TO rules_src DO
  NOTIFY rules_src_deletion
-    r4 AS
+    r5 AS
     ON INSERT TO rules_src DO INSTEAD  INSERT INTO rules_log AS trgt (f1, f2)  SELECT new.f1,
             new.f2
   RETURNING trgt.f1,
     trgt.f2
-    r5 AS
+    r6 AS
     ON UPDATE TO rules_src DO INSTEAD  UPDATE rules_log trgt SET tag = 'updated'::text
   WHERE trgt.f1 = new.f1
 
@@ -3584,6 +3570,18 @@ CREATE RULE rule1 AS ON INSERT TO ruletest_v1
 SET SESSION AUTHORIZATION regress_rule_user1;
 INSERT INTO ruletest_v1 VALUES (1);
 RESET SESSION AUTHORIZATION;
+-- Test that main query's relation's permissions are checked before
+-- the rule action's relation's.
+CREATE TABLE ruletest_t3 (x int);
+CREATE RULE rule2 AS ON UPDATE TO ruletest_t1
+    DO INSTEAD INSERT INTO ruletest_t2 VALUES (OLD.*);
+REVOKE ALL ON ruletest_t2 FROM regress_rule_user1;
+REVOKE ALL ON ruletest_t3 FROM regress_rule_user1;
+ALTER TABLE ruletest_t1 OWNER TO regress_rule_user1;
+SET SESSION AUTHORIZATION regress_rule_user1;
+UPDATE ruletest_t1 t1 SET x = 0 FROM ruletest_t3 t3 WHERE t1.x = t3.x;
+ERROR:  permission denied for table ruletest_t3
+RESET SESSION AUTHORIZATION;
 SELECT * FROM ruletest_t1;
  x 
 ---
@@ -3596,6 +3594,8 @@ SELECT * FROM ruletest_t2;
 (1 row)
 
 DROP VIEW ruletest_v1;
+DROP RULE rule2 ON ruletest_t1;
+DROP TABLE ruletest_t3;
 DROP TABLE ruletest_t2;
 DROP TABLE ruletest_t1;
 DROP USER regress_rule_user1;

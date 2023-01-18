@@ -132,7 +132,8 @@ PostgreSQL documentation
 
      <varlistentry>
       <term><option>-b</option></term>
-      <term><option>--blobs</option></term>
+      <term><option>--large-objects</option></term>
+      <term><option>--blobs</option> (deprecated)</term>
       <listitem>
        <para>
         Include large objects in the dump.  This is the default behavior
@@ -140,7 +141,7 @@ PostgreSQL documentation
         <option>--schema-only</option> is specified.  The <option>-b</option>
         switch is therefore only useful to add large objects to dumps
         where a specific schema or table has been requested.  Note that
-        blobs are considered data and therefore will be included when
+        large objects are considered data and therefore will be included when
         <option>--data-only</option> is used, but not
         when <option>--schema-only</option> is.
        </para>
@@ -149,7 +150,8 @@ PostgreSQL documentation
 
      <varlistentry>
       <term><option>-B</option></term>
-      <term><option>--no-blobs</option></term>
+      <term><option>--no-large-objects</option></term>
+      <term><option>--no-blobs</option> (deprecated)</term>
       <listitem>
        <para>
         Exclude large objects in the dump.
@@ -323,7 +325,7 @@ PostgreSQL documentation
           <para>
            Output a directory-format archive suitable for input into
            <application>pg_restore</application>. This will create a directory
-           with one file for each table and blob being dumped, plus a
+           with one file for each table and large object being dumped, plus a
            so-called Table of Contents file describing the dumped objects in a
            machine-readable format that <application>pg_restore</application>
            can read. A directory format archive can be manipulated with
@@ -434,9 +436,9 @@ PostgreSQL documentation
 
        <note>
         <para>
-         Non-schema objects such as blobs are not dumped when <option>-n</option> is
-         specified.  You can add blobs back to the dump with the
-         <option>--blobs</option> switch.
+         Non-schema objects such as large objects are not dumped when <option>-n</option> is
+         specified.  You can add large objects back to the dump with the
+         <option>--large-objects</option> switch.
         </para>
        </note>
 
@@ -644,17 +646,39 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
-      <term><option>-Z <replaceable class="parameter">0..9</replaceable></option></term>
-      <term><option>--compress=<replaceable class="parameter">0..9</replaceable></option></term>
+      <term><option>-Z <replaceable class="parameter">level</replaceable></option></term>
+      <term><option>-Z <replaceable class="parameter">method</replaceable></option>[:<replaceable>detail</replaceable>]</term>
+      <term><option>--compress=<replaceable class="parameter">level</replaceable></option></term>
+      <term><option>--compress=<replaceable class="parameter">method</replaceable></option>[:<replaceable>detail</replaceable>]</term>
       <listitem>
        <para>
-        Specify the compression level to use.  Zero means no compression.
+        Specify the compression method and/or the compression level to use.
+        The compression method can be set to <literal>gzip</literal> or
+        <literal>none</literal> for no compression.
+        A compression detail string can optionally be specified.  If the
+        detail string is an integer, it specifies the compression level.
+        Otherwise, it should be a comma-separated list of items, each of the
+        form <literal>keyword</literal> or <literal>keyword=value</literal>.
+        Currently, the only supported keyword is <literal>level</literal>.
+       </para>
+
+       <para>
+        If no compression level is specified, the default compression
+        level will be used. If only a level is specified without mentioning
+        an algorithm, <literal>gzip</literal> compression will be used if
+        the level is greater than <literal>0</literal>, and no compression
+        will be used if the level is <literal>0</literal>.
+       </para>
+
+       <para>
         For the custom and directory archive formats, this specifies compression of
-        individual table-data segments, and the default is to compress
-        at a moderate level.
-        For plain text output, setting a nonzero compression level causes
-        the entire output file to be compressed, as though it had been
-        fed through <application>gzip</application>; but the default is not to compress.
+        individual table-data segments, and the default is to compress using
+        <literal>gzip</literal> at a moderate level. For plain text output,
+        setting a nonzero compression level causes the entire output file to be compressed,
+        as though it had been fed through <application>gzip</application>; but the default
+        is not to compress.
+       </para>
+       <para>
         The tar archive format currently does not support compression at all.
        </para>
       </listitem>

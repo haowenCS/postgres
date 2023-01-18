@@ -215,7 +215,7 @@ shared_buffers = 128MB
     </para>
    </sect2>
 
-   <sect2 id="config-setting-sql-command-interaction">
+   <sect2 id="config-setting-sql">
     <title>Parameter Interaction via SQL</title>
 
      <para>
@@ -1355,7 +1355,7 @@ include_dir 'conf.d'
        <para>
         Explanation of the default value:
         <variablelist>
-         <varlistentry>
+         <varlistentry id="guc-ssl-ciphers-high">
           <term><literal>HIGH</literal></term>
           <listitem>
            <para>
@@ -1365,7 +1365,7 @@ include_dir 'conf.d'
           </listitem>
          </varlistentry>
 
-         <varlistentry>
+         <varlistentry id="guc-ssl-ciphers-medium">
           <term><literal>MEDIUM</literal></term>
           <listitem>
            <para>
@@ -1375,7 +1375,7 @@ include_dir 'conf.d'
           </listitem>
          </varlistentry>
 
-         <varlistentry>
+         <varlistentry id="guc-ssl-ciphers-plus-3des">
           <term><literal>+3DES</literal></term>
           <listitem>
            <para>
@@ -1389,7 +1389,7 @@ include_dir 'conf.d'
           </listitem>
          </varlistentry>
 
-         <varlistentry>
+         <varlistentry id="guc-ssl-ciphers-not-anull">
           <term><literal>!aNULL</literal></term>
           <listitem>
            <para>
@@ -4156,7 +4156,13 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
     <para>
      These settings control the behavior of the built-in
      <firstterm>streaming replication</firstterm> feature (see
-     <xref linkend="streaming-replication"/>).  Servers will be either a
+     <xref linkend="streaming-replication"/>), and the built-in
+     <firstterm>logical replication</firstterm> feature (see
+     <xref linkend="logical-replication"/>).
+    </para>
+
+    <para>
+     For <emphasis>streaming replication</emphasis>, servers will be either a
      primary or a standby server.  Primaries can send data, while standbys
      are always receivers of replicated data.  When cascading replication
      (see <xref linkend="cascading-replication"/>) is used, standby servers
@@ -4164,6 +4170,17 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
      Parameters are mainly for sending and standby servers, though some
      parameters have meaning only on the primary server.  Settings may vary
      across the cluster without problems if that is required.
+    </para>
+
+    <para>
+     For <emphasis>logical replication</emphasis>, <firstterm>publishers</firstterm>
+     (servers that do <link linkend="sql-createpublication"><command>CREATE PUBLICATION</command></link>)
+     replicate data to <firstterm>subscribers</firstterm>
+     (servers that do <link linkend="sql-createsubscription"><command>CREATE SUBSCRIPTION</command></link>).
+     Servers can also be publishers and subscribers at the same time. Note,
+     the following sections refer to publishers as "senders". For more details
+     about logical replication configuration settings refer to
+     <xref linkend="logical-replication-config"/>.
     </para>
 
     <sect2 id="runtime-config-replication-sender">
@@ -4213,6 +4230,7 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
        <term><varname>max_replication_slots</varname> (<type>integer</type>)
        <indexterm>
         <primary><varname>max_replication_slots</varname> configuration parameter</primary>
+        <secondary>in a sending server</secondary>
        </indexterm>
        </term>
        <listitem>
@@ -4229,14 +4247,8 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
         </para>
 
         <para>
-         On the subscriber side, specifies how many replication origins (see
-         <xref linkend="replication-origins"/>) can be tracked simultaneously,
-         effectively limiting how many logical replication subscriptions can
-         be created on the server. Setting it to a lower value than the current
-         number of tracked replication origins (reflected in
-         <link linkend="view-pg-replication-origin-status">pg_replication_origin_status</link>,
-         not <link linkend="catalog-pg-replication-origin">pg_replication_origin</link>)
-         will prevent the server from starting.
+         Note that this parameter also applies on the subscriber side, but with
+         a different meaning.
         </para>
        </listitem>
       </varlistentry>
@@ -4914,16 +4926,38 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
      <para>
       These settings control the behavior of a logical replication subscriber.
       Their values on the publisher are irrelevant.
-     </para>
-
-     <para>
-      Note that <varname>wal_receiver_timeout</varname>,
-      <varname>wal_receiver_status_interval</varname> and
-      <varname>wal_retrieve_retry_interval</varname> configuration parameters
-      affect the logical replication workers as well.
+      See <xref linkend="logical-replication-config"/> for more details.
      </para>
 
      <variablelist>
+
+     <varlistentry id="guc-max-replication-slots-subscriber" xreflabel="max_replication_slots">
+      <term><varname>max_replication_slots</varname> (<type>integer</type>)
+       <indexterm>
+        <primary><varname>max_replication_slots</varname> configuration parameter</primary>
+        <secondary>in a subscriber</secondary>
+       </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies how many replication origins (see
+        <xref linkend="replication-origins"/>) can be tracked simultaneously,
+        effectively limiting how many logical replication subscriptions can
+        be created on the server. Setting it to a lower value than the current
+        number of tracked replication origins (reflected in
+        <link linkend="view-pg-replication-origin-status">pg_replication_origin_status</link>)
+        will prevent the server from starting.
+        <literal>max_replication_slots</literal> must be set to at least the
+        number of subscriptions that will be added to the subscriber, plus some
+        reserve for table synchronization.
+       </para>
+
+       <para>
+        Note that this parameter also applies on a sending server, but with
+        a different meaning.
+       </para>
+      </listitem>
+     </varlistentry>
 
      <varlistentry id="guc-max-logical-replication-workers" xreflabel="max_logical_replication_workers">
       <term><varname>max_logical_replication_workers</varname> (<type>integer</type>)
@@ -4934,7 +4968,8 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       <listitem>
        <para>
         Specifies maximum number of logical replication workers. This includes
-        both apply workers and table synchronization workers.
+        leader apply workers, parallel apply workers, and table synchronization
+        workers.
        </para>
        <para>
         Logical replication workers are taken from the pool defined by
@@ -4964,6 +4999,31 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
        </para>
        <para>
         The synchronization workers are taken from the pool defined by
+        <varname>max_logical_replication_workers</varname>.
+       </para>
+       <para>
+        The default value is 2. This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server command
+        line.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-max-parallel-apply-workers-per-subscription" xreflabel="max_parallel_apply_workers_per_subscription">
+      <term><varname>max_parallel_apply_workers_per_subscription</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>max_parallel_apply_workers_per_subscription</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Maximum number of parallel apply workers per subscription. This
+        parameter controls the amount of parallelism for streaming of
+        in-progress transactions with subscription parameter
+        <literal>streaming = parallel</literal>.
+       </para>
+       <para>
+        The parallel apply workers are taken from the pool defined by
         <varname>max_logical_replication_workers</varname>.
        </para>
        <para>
@@ -5273,6 +5333,29 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         finalization must be performed later.  Because partitionwise grouping
         or aggregation can use significantly more CPU time and memory during
         planning, the default is <literal>off</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-enable-presorted-aggregate" xreflabel="enable_presorted_aggregate">
+      <term><varname>enable_presorted_aggregate</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>enable_presorted_aggregate</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls if the query planner will produce a plan which will provide
+        rows which are presorted in the order required for the query's
+        <literal>ORDER BY</literal> / <literal>DISTINCT</literal> aggregate
+        functions.  When disabled, the query planner will produce a plan which
+        will always require the executor to perform a sort before performing
+        aggregation of each aggregate function containing an
+        <literal>ORDER BY</literal> or <literal>DISTINCT</literal> clause.
+        When enabled, the planner will try to produce a more efficient plan
+        which provides input to the aggregate functions which is presorted in
+        the order they require for aggregation.  The default value is
+        <literal>on</literal>.
        </para>
       </listitem>
      </varlistentry>
@@ -5979,7 +6062,7 @@ SELECT * FROM parent WHERE key = 2400;
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-plan-cache_mode" xreflabel="plan_cache_mode">
+     <varlistentry id="guc-plan-cache-mode" xreflabel="plan_cache_mode">
       <term><varname>plan_cache_mode</varname> (<type>enum</type>)
       <indexterm>
        <primary><varname>plan_cache_mode</varname> configuration parameter</primary>
@@ -6871,7 +6954,7 @@ local0.*    /var/log/postgresql
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-debug-print-parse">
       <term><varname>debug_print_parse</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>debug_print_parse</varname> configuration parameter</primary>
@@ -6902,7 +6985,7 @@ local0.*    /var/log/postgresql
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-debug-pretty-print">
       <term><varname>debug_pretty_print</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>debug_pretty_print</varname> configuration parameter</primary>
@@ -7832,7 +7915,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
      </table>
     </sect2>
 
-   <sect2>
+   <sect2 id="runtime-config-logging-proc-title">
     <title>Process Title</title>
 
     <para>
@@ -8120,7 +8203,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-log-statement-stats">
       <term><varname>log_statement_stats</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>log_statement_stats</varname> configuration parameter</primary>
@@ -9137,9 +9220,9 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        Specifies the cutoff age (in transactions) that <command>VACUUM</command>
-        should use to decide whether to freeze row versions
-        while scanning a table.
+        Specifies the cutoff age (in transactions) that
+        <command>VACUUM</command> should use to decide whether to
+        trigger freezing of pages that have an older XID.
         The default is 50 million transactions.  Although
         users can set this value anywhere from zero to one billion,
         <command>VACUUM</command> will silently limit the effective value to half
@@ -9217,9 +9300,8 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       <listitem>
        <para>
         Specifies the cutoff age (in multixacts) that <command>VACUUM</command>
-        should use to decide whether to replace multixact IDs with a newer
-        transaction ID or multixact ID while scanning a table.  The default
-        is 5 million multixacts.
+        should use to decide whether to trigger freezing of pages with
+        an older multixact ID.  The default is 5 million multixacts.
         Although users can set this value anywhere from zero to one billion,
         <command>VACUUM</command> will silently limit the effective value to half
         the value of <xref linkend="guc-autovacuum-multixact-freeze-max-age"/>,
@@ -9361,6 +9443,39 @@ SET XML OPTION { DOCUMENT | CONTENT };
         index storage parameters.
          See <xref linkend="gin-fast-update"/> and <xref linkend="gin-tips"/>
          for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-createrole-self-grant" xreflabel="createrole_self_grant">
+      <term><varname>createrole_self_grant</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>createrole_self_grant</varname></primary>
+       <secondary>configuration parameter</secondary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        If a user who has <literal>CREATEROLE</literal> but not
+        <literal>SUPERUSER</literal> creates a role, and if this
+        is set to a non-empty value, the newly-created role will be granted
+        to the creating user with the options specified. The value must be
+        <literal>set</literal>, <literal>inherit</literal>, or a
+        comma-separated list of these.
+       </para>
+       <para>
+        The purpose of this option is to allow a <literal>CREATEROLE</literal>
+        user who is not a superuser to automatically inherit, or automatically
+        gain the ability to <literal>SET ROLE</literal> to, any created users.
+        Since a <literal>CREATEROLE</literal> user is always implicitly granted
+        <literal>ADMIN OPTION</literal> on created roles, that user could
+        always execute a <literal>GRANT</literal> statement that would achieve
+        the same effect as this setting. However, it can be convenient for
+        usability reasons if the grant happens automatically. A superuser
+        automatically inherits the privileges of every role and can always
+        <literal>SET ROLE</literal> to any role, and this setting can be used
+        to produce a similar behavior for <literal>CREATEROLE</literal> users
+        for users which they create.
        </para>
       </listitem>
      </varlistentry>
@@ -11099,7 +11214,7 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-trace-locks" xreflabel="trace_locks">
       <term><varname>trace_locks</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>trace_locks</varname> configuration parameter</primary>
@@ -11140,7 +11255,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-trace-lwlocks" xreflabel="trace_lwlocks">
       <term><varname>trace_lwlocks</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>trace_lwlocks</varname> configuration parameter</primary>
@@ -11160,7 +11275,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-trace-userlocks" xreflabel="trace_userlocks">
       <term><varname>trace_userlocks</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>trace_userlocks</varname> configuration parameter</primary>
@@ -11179,7 +11294,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-trace-lock-oidmin" xreflabel="trace_lock_oidmin">
       <term><varname>trace_lock_oidmin</varname> (<type>integer</type>)
       <indexterm>
        <primary><varname>trace_lock_oidmin</varname> configuration parameter</primary>
@@ -11198,7 +11313,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-trace-lock-table" xreflabel="trace_lock_table">
       <term><varname>trace_lock_table</varname> (<type>integer</type>)
       <indexterm>
        <primary><varname>trace_lock_table</varname> configuration parameter</primary>
@@ -11216,7 +11331,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-debug-deadlocks" xreflabel="debug_deadlocks">
       <term><varname>debug_deadlocks</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>debug_deadlocks</varname> configuration parameter</primary>
@@ -11235,7 +11350,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-log-btree-build-stats" xreflabel="log_btree_build_stats">
       <term><varname>log_btree_build_stats</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>log_btree_build_stats</varname> configuration parameter</primary>
@@ -11536,6 +11651,34 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
         This parameter can only be set in
         the <filename>postgresql.conf</filename> file or on the server
         command line.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-logical-decoding-mode" xreflabel="logical_decoding_mode">
+      <term><varname>logical_decoding_mode</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>logical_decoding_mode</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Allows streaming or serializing changes immediately in logical decoding.
+        The allowed values of <varname>logical_decoding_mode</varname> are
+        <literal>buffered</literal> and <literal>immediate</literal>. When set
+        to <literal>immediate</literal>, stream each change if
+        <literal>streaming</literal> option (see optional parameters set by
+        <link linkend="sql-createsubscription"><command>CREATE SUBSCRIPTION</command></link>)
+        is enabled, otherwise, serialize each change.  When set to
+        <literal>buffered</literal>, which is the default, decoding will stream
+        or serialize changes when <varname>logical_decoding_work_mem</varname>
+        is reached.
+       </para>
+       <para>
+        This parameter is intended to be used to test logical decoding and
+        replication of large transactions for which otherwise we need to
+        generate the changes till <varname>logical_decoding_work_mem</varname>
+        is reached.
        </para>
       </listitem>
      </varlistentry>

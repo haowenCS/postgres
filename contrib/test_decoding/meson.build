@@ -1,3 +1,5 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 test_decoding_sources = files(
   'test_decoding.c',
 )
@@ -43,6 +45,9 @@ tests += {
     'regress_args': [
       '--temp-config', files('logical.conf'),
     ],
+    # Disabled because these tests require "wal_level=logical", which
+    # typical runningcheck users do not have (e.g. buildfarm clients).
+    'runningcheck': false,
   },
   'isolation': {
     'specs': [
@@ -61,6 +66,8 @@ tests += {
     'regress_args': [
       '--temp-config', files('logical.conf'),
     ],
+    # see above
+    'runningcheck': false,
   },
   'tap': {
     'tests': [

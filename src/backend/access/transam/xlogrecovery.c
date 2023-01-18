@@ -14,7 +14,7 @@
  * for interrogating recovery state and controlling the recovery process.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/access/transam/xlogrecovery.c
@@ -2114,7 +2114,7 @@ CheckRecoveryConsistency(void)
 
 		/*
 		 * Check that pg_tblspc doesn't contain any real directories. Replay
-		 * of Database/CREATE_* records may have created ficticious tablespace
+		 * of Database/CREATE_* records may have created fictitious tablespace
 		 * directories that should have been removed by the time consistency
 		 * was reached.
 		 */
@@ -3075,9 +3075,10 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 			XLogFileName(fname, xlogreader->seg.ws_tli, segno,
 						 wal_segment_size);
 			ereport(emode_for_corrupt_record(emode, xlogreader->EndRecPtr),
-					(errmsg("unexpected timeline ID %u in WAL segment %s, offset %u",
+					(errmsg("unexpected timeline ID %u in WAL segment %s, LSN %X/%X, offset %u",
 							xlogreader->latestPageTLI,
 							fname,
+							LSN_FORMAT_ARGS(xlogreader->latestPagePtr),
 							offset)));
 			record = NULL;
 		}
@@ -3280,14 +3281,16 @@ retry:
 			errno = save_errno;
 			ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
 					(errcode_for_file_access(),
-					 errmsg("could not read from WAL segment %s, offset %u: %m",
-							fname, readOff)));
+					 errmsg("could not read from WAL segment %s, LSN %X/%X, offset %u: %m",
+							fname, LSN_FORMAT_ARGS(targetPagePtr),
+							readOff)));
 		}
 		else
 			ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read from WAL segment %s, offset %u: read %d of %zu",
-							fname, readOff, r, (Size) XLOG_BLCKSZ)));
+					 errmsg("could not read from WAL segment %s, LSN %X/%X, offset %u: read %d of %zu",
+							fname, LSN_FORMAT_ARGS(targetPagePtr),
+							readOff, r, (Size) XLOG_BLCKSZ)));
 		goto next_record_is_invalid;
 	}
 	pgstat_report_wait_end();
@@ -4787,12 +4790,14 @@ check_recovery_target_time(char **newval, void **extra, GucSource source)
 			char	   *field[MAXDATEFIELDS];
 			int			ftype[MAXDATEFIELDS];
 			char		workbuf[MAXDATELEN + MAXDATEFIELDS];
+			DateTimeErrorExtra dtextra;
 			TimestampTz timestamp;
 
 			dterr = ParseDateTime(str, workbuf, sizeof(workbuf),
 								  field, ftype, MAXDATEFIELDS, &nf);
 			if (dterr == 0)
-				dterr = DecodeDateTime(field, ftype, nf, &dtype, tm, &fsec, &tz);
+				dterr = DecodeDateTime(field, ftype, nf,
+									   &dtype, tm, &fsec, &tz, &dtextra);
 			if (dterr != 0)
 				return false;
 			if (dtype != DTK_DATE)

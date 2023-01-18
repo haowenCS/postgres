@@ -428,7 +428,6 @@ CompiledExprState
 CompositeIOData
 CompositeTypeStmt
 CompoundAffixFlag
-CompressionAlgorithm
 CompressionLocation
 CompressorState
 ComputeXidHorizonsResult
@@ -644,6 +643,7 @@ EquivalenceClass
 EquivalenceMember
 ErrorContextCallback
 ErrorData
+ErrorSaveContext
 EstimateDSMForeignScan_function
 EstimationInfo
 EventTriggerCacheEntry
@@ -1456,6 +1456,7 @@ LogicalDecodeStreamStopCB
 LogicalDecodeStreamTruncateCB
 LogicalDecodeTruncateCB
 LogicalDecodingContext
+LogicalDecodingMode
 LogicalErrorCallbackState
 LogicalOutputPluginInit
 LogicalOutputPluginWriterPrepareWrite
@@ -1472,6 +1473,7 @@ LogicalRepRelId
 LogicalRepRelMapEntry
 LogicalRepRelation
 LogicalRepRollbackPreparedTxnData
+LogicalRepStreamAbortData
 LogicalRepTupleData
 LogicalRepTyp
 LogicalRepWorker
@@ -1875,6 +1877,9 @@ PageXLogRecPtr
 PagetableEntry
 Pairs
 ParallelAppendState
+ParallelApplyWorkerEntry
+ParallelApplyWorkerInfo
+ParallelApplyWorkerShared
 ParallelBitmapHeapState
 ParallelBlockTableScanDesc
 ParallelBlockTableScanWorker
@@ -1894,6 +1899,7 @@ ParallelSlotResultHandler
 ParallelState
 ParallelTableScanDesc
 ParallelTableScanDescData
+ParallelTransState
 ParallelVacuumState
 ParallelWorkerContext
 ParallelWorkerInfo
@@ -1923,6 +1929,7 @@ ParserState
 PartClauseInfo
 PartClauseMatchStatus
 PartClauseTarget
+PartialFileSetState
 PartitionBoundInfo
 PartitionBoundInfoData
 PartitionBoundSpec
@@ -2188,6 +2195,7 @@ RI_ConstraintInfo
 RI_QueryHashEntry
 RI_QueryKey
 RTEKind
+RTEPermissionInfo
 RWConflict
 RWConflictPoolHeader
 Range
@@ -2772,6 +2780,7 @@ TocEntry
 TokenAuxData
 TokenizedAuthLine
 TrackItem
+TransApplyAction
 TransInvalidationInfo
 TransState
 TransactionId
@@ -3265,6 +3274,7 @@ fix_scan_expr_context
 fix_upper_expr_context
 fix_windowagg_cond_context
 flatten_join_alias_vars_context
+flatten_rtes_walker_context
 float4
 float4KEY
 float8

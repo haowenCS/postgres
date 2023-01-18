@@ -3,7 +3,7 @@
  * nodeAppend.c
  *	  routines to handle append nodes.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -134,7 +134,7 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 	appendstate->as_begun = false;
 
 	/* If run-time partition pruning is enabled, then set that up now */
-	if (node->part_prune_info != NULL)
+	if (node->part_prune_index >= 0)
 	{
 		PartitionPruneState *prunestate;
 
@@ -145,7 +145,8 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 		 */
 		prunestate = ExecInitPartitionPruning(&appendstate->ps,
 											  list_length(node->appendplans),
-											  node->part_prune_info,
+											  node->part_prune_index,
+											  node->apprelids,
 											  &validsubplans);
 		appendstate->as_prune_state = prunestate;
 		nplans = bms_num_members(validsubplans);

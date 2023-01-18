@@ -5,7 +5,7 @@
  * SQL commands and SQL-accessible functions related to GUC variables.
  *
  *
- * Copyright (c) 2000-2022, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2023, PostgreSQL Global Development Group
  * Written by Peter Eisentraut <peter_e@gmx.net>.
  *
  * IDENTIFICATION
@@ -166,12 +166,22 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 char *
 ExtractSetVariableArgs(VariableSetStmt *stmt)
 {
+
 	switch (stmt->kind)
 	{
 		case VAR_SET_VALUE:
 			return flatten_set_variable_args(stmt->name, stmt->args);
 		case VAR_SET_CURRENT:
-			return GetConfigOptionByName(stmt->name, NULL, false);
+			{
+				struct config_generic *record;
+				char	   *result;
+
+				result = GetConfigOptionByName(stmt->name, NULL, false);
+				record = find_option(stmt->name, false, false, ERROR);
+				stmt->user_set = (record->scontext == PGC_USERSET);
+
+				return result;
+			}
 		default:
 			return NULL;
 	}

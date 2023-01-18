@@ -9,7 +9,7 @@
  * Reading data from the input file or client and parsing it into Datums
  * is handled in copyfromparse.c.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -761,6 +761,12 @@ CopyFrom(CopyFromState cstate)
 	resultRelInfo = target_resultRelInfo = makeNode(ResultRelInfo);
 	ExecInitResultRelation(estate, resultRelInfo, 1);
 
+	/*
+	 * Copy the RTEPermissionInfos into estate as well, so that
+	 * ExecGetInsertedCols() et al will work correctly.
+	 */
+	estate->es_rteperminfos = cstate->rteperminfos;
+
 	/* Verify the named relation is a valid target for INSERT */
 	CheckValidResultRel(resultRelInfo, CMD_INSERT);
 
@@ -1088,7 +1094,7 @@ CopyFrom(CopyFromState cstate)
 			 * We might need to convert from the root rowtype to the partition
 			 * rowtype.
 			 */
-			map = resultRelInfo->ri_RootToPartitionMap;
+			map = ExecGetRootToChildMap(resultRelInfo, estate);
 			if (insertMethod == CIM_SINGLE || !leafpart_use_multi_insert)
 			{
 				/* non batch insert */
@@ -1525,9 +1531,12 @@ BeginCopyFrom(ParseState *pstate,
 
 	initStringInfo(&cstate->attribute_buf);
 
-	/* Assign range table, we'll need it in CopyFrom. */
+	/* Assign range table and rteperminfos, we'll need them in CopyFrom. */
 	if (pstate)
+	{
 		cstate->range_table = pstate->p_rtable;
+		cstate->rteperminfos = pstate->p_rteperminfos;
+	}
 
 	tupDesc = RelationGetDescr(cstate->rel);
 	num_phys_attrs = tupDesc->natts;

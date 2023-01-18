@@ -1,3 +1,5 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 # FIXME: prevent install during main install, but not during test :/
 
 test_oat_hooks_sources = files(
@@ -25,5 +27,6 @@ tests += {
       'test_oat_hooks',
     ],
     'regress_args': ['--no-locale', '--encoding=UTF8'],
+    'runningcheck': false,
   },
 }

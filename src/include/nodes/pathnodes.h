@@ -6,7 +6,7 @@
  * We don't support copying RelOptInfo, IndexOptInfo, or Path nodes.
  * There are some subsidiary structs that are useful to copy, though.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/pathnodes.h
@@ -113,6 +113,9 @@ typedef struct PlannerGlobal
 	/* "flat" rangetable for executor */
 	List	   *finalrtable;
 
+	/* "flat" list of RTEPermissionInfos */
+	List	   *finalrteperminfos;
+
 	/* "flat" list of PlanRowMarks */
 	List	   *finalrowmarks;
 
@@ -121,6 +124,9 @@ typedef struct PlannerGlobal
 
 	/* "flat" list of AppendRelInfos */
 	List	   *appendRelations;
+
+	/* List of PartitionPruneInfo contained in the plan */
+	List	   *partPruneInfos;
 
 	/* OIDs of relations the plan depends on */
 	List	   *relationOids;
@@ -503,6 +509,9 @@ struct PlannerInfo
 
 	/* Does this query modify any partition key columns? */
 	bool		partColsUpdated;
+
+	/* PartitionPruneInfos added in this query's plan. */
+	List	   *partPruneInfos;
 };
 
 
@@ -644,7 +653,7 @@ typedef struct PartitionSchemeData *PartitionScheme;
  *		lateral_referencers - relids of rels that reference this one laterally
  *				(includes both direct and indirect lateral references)
  *		indexlist - list of IndexOptInfo nodes for relation's indexes
- *					(always NIL if it's not a table)
+ *					(always NIL if it's not a table or partitioned table)
  *		pages - number of disk pages in relation (zero if not a table)
  *		tuples - number of tuples in relation (not considering restrictions)
  *		allvisfrac - fraction of disk pages that are marked all-visible
@@ -1088,11 +1097,11 @@ struct IndexOptInfo
 	Oid		   *opfamily pg_node_attr(array_size(nkeycolumns));
 	/* OIDs of opclass declared input data types */
 	Oid		   *opcintype pg_node_attr(array_size(nkeycolumns));
-	/* OIDs of btree opfamilies, if orderable */
+	/* OIDs of btree opfamilies, if orderable.  NULL if partitioned index */
 	Oid		   *sortopfamily pg_node_attr(array_size(nkeycolumns));
-	/* is sort order descending? */
+	/* is sort order descending? or NULL if partitioned index */
 	bool	   *reverse_sort pg_node_attr(array_size(nkeycolumns));
-	/* do NULLs come first in the sort order? */
+	/* do NULLs come first in the sort order? or NULL if partitioned index */
 	bool	   *nulls_first pg_node_attr(array_size(nkeycolumns));
 	/* opclass-specific options for columns */
 	bytea	  **opclassoptions pg_node_attr(read_write_ignore);
@@ -1130,7 +1139,7 @@ struct IndexOptInfo
 
 	/*
 	 * Remaining fields are copied from the index AM's API struct
-	 * (IndexAmRoutine).
+	 * (IndexAmRoutine).  These fields are not set for partitioned indexes.
 	 */
 	bool		amcanorderbyop;
 	bool		amoptionalkey;
@@ -1273,7 +1282,9 @@ typedef struct StatisticExtInfo
  *
  * NB: EquivalenceClasses are never copied after creation.  Therefore,
  * copyObject() copies pointers to them as pointers, and equal() compares
- * pointers to EquivalenceClasses via pointer equality.
+ * pointers to EquivalenceClasses via pointer equality.  This is implemented
+ * by putting copy_as_scalar and equal_as_scalar attributes on fields that
+ * are pointers to EquivalenceClasses.  The same goes for EquivalenceMembers.
  */
 typedef struct EquivalenceClass
 {
@@ -1364,7 +1375,8 @@ typedef struct PathKey
 
 	NodeTag		type;
 
-	EquivalenceClass *pk_eclass;	/* the value that is ordered */
+	/* the value that is ordered */
+	EquivalenceClass *pk_eclass pg_node_attr(copy_as_scalar, equal_as_scalar);
 	Oid			pk_opfamily;	/* btree opfamily defining the ordering */
 	int			pk_strategy;	/* sort direction (ASC or DESC) */
 	bool		pk_nulls_first; /* do NULLs come before normal values? */
@@ -1856,8 +1868,8 @@ typedef struct MemoizePath
 {
 	Path		path;
 	Path	   *subpath;		/* outerpath to cache tuples from */
-	List	   *hash_operators; /* hash operators for each key */
-	List	   *param_exprs;	/* cache keys */
+	List	   *hash_operators; /* OIDs of hash equality ops for cache keys */
+	List	   *param_exprs;	/* expressions that are cache keys */
 	bool		singlerow;		/* true if the cache entry is to be marked as
 								 * complete after caching the first record. */
 	bool		binary_mode;	/* true when cache key should be compared bit
@@ -2472,7 +2484,7 @@ typedef struct RestrictInfo
 	 * Generating EquivalenceClass.  This field is NULL unless clause is
 	 * potentially redundant.
 	 */
-	EquivalenceClass *parent_ec pg_node_attr(equal_ignore, read_write_ignore);
+	EquivalenceClass *parent_ec pg_node_attr(copy_as_scalar, equal_ignore, read_write_ignore);
 
 	/*
 	 * cache space for cost and selectivity
@@ -2500,13 +2512,13 @@ typedef struct RestrictInfo
 	 */
 
 	/* EquivalenceClass containing lefthand */
-	EquivalenceClass *left_ec pg_node_attr(equal_ignore, read_write_ignore);
+	EquivalenceClass *left_ec pg_node_attr(copy_as_scalar, equal_ignore, read_write_ignore);
 	/* EquivalenceClass containing righthand */
-	EquivalenceClass *right_ec pg_node_attr(equal_ignore, read_write_ignore);
+	EquivalenceClass *right_ec pg_node_attr(copy_as_scalar, equal_ignore, read_write_ignore);
 	/* EquivalenceMember for lefthand */
-	EquivalenceMember *left_em pg_node_attr(equal_ignore);
+	EquivalenceMember *left_em pg_node_attr(copy_as_scalar, equal_ignore);
 	/* EquivalenceMember for righthand */
-	EquivalenceMember *right_em pg_node_attr(equal_ignore);
+	EquivalenceMember *right_em pg_node_attr(copy_as_scalar, equal_ignore);
 
 	/*
 	 * List of MergeScanSelCache structs.  Those aren't Nodes, so hard to

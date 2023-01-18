@@ -87,6 +87,12 @@ TRUNCATE TIMESTAMPTZ_TBL;
 INSERT INTO TIMESTAMPTZ_TBL VALUES ('-infinity');
 INSERT INTO TIMESTAMPTZ_TBL VALUES ('infinity');
 INSERT INTO TIMESTAMPTZ_TBL VALUES ('epoch');
+SELECT timestamptz 'infinity' = timestamptz '+infinity' AS t;
+ t 
+---
+ t
+(1 row)
+
 -- Postgres v6.0 standard output format
 INSERT INTO TIMESTAMPTZ_TBL VALUES ('Mon Feb 10 17:32:01 1997 PST');
 -- Variations on Postgres v6.1 standard output format
@@ -168,6 +174,37 @@ SELECT '205000-01-10 17:32:01 Europe/Helsinki'::timestamptz; -- non-DST
           timestamptz           
 --------------------------------
  Fri Jan 10 07:32:01 205000 PST
+(1 row)
+
+-- Test non-error-throwing API
+SELECT pg_input_is_valid('now', 'timestamptz');
+ pg_input_is_valid 
+-------------------
+ t
+(1 row)
+
+SELECT pg_input_is_valid('garbage', 'timestamptz');
+ pg_input_is_valid 
+-------------------
+ f
+(1 row)
+
+SELECT pg_input_is_valid('2001-01-01 00:00 Nehwon/Lankhmar', 'timestamptz');
+ pg_input_is_valid 
+-------------------
+ f
+(1 row)
+
+SELECT pg_input_error_message('garbage', 'timestamptz');
+                      pg_input_error_message                       
+-------------------------------------------------------------------
+ invalid input syntax for type timestamp with time zone: "garbage"
+(1 row)
+
+SELECT pg_input_error_message('2001-01-01 00:00 Nehwon/Lankhmar', 'timestamptz');
+           pg_input_error_message           
+--------------------------------------------
+ time zone "nehwon/lankhmar" not recognized
 (1 row)
 
 -- Check date conversion and date arithmetic

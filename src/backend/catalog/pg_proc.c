@@ -3,7 +3,7 @@
  * pg_proc.c
  *	  routines to support manipulation of the pg_proc relation
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -698,6 +698,7 @@ ProcedureCreate(const char *procedureName,
 			{
 				save_nestlevel = NewGUCNestLevel();
 				ProcessGUCArray(set_items,
+								NULL,
 								(superuser() ? PGC_SUSET : PGC_USERSET),
 								PGC_S_SESSION,
 								GUC_ACTION_SAVE);

@@ -3,7 +3,7 @@
  * execPartition.c
  *	  Support routines for partitioning.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -463,7 +463,7 @@ ExecFindPartition(ModifyTableState *mtstate,
 			 */
 			if (is_leaf)
 			{
-				TupleConversionMap *map = rri->ri_RootToPartitionMap;
+				TupleConversionMap *map = ExecGetRootToChildMap(rri, estate);
 
 				if (map)
 					slot = execute_attr_map_slot(map->attrMap, rootslot,
@@ -727,7 +727,7 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 			OnConflictSetState *onconfl = makeNode(OnConflictSetState);
 			TupleConversionMap *map;
 
-			map = leaf_part_rri->ri_RootToPartitionMap;
+			map = ExecGetRootToChildMap(leaf_part_rri, estate);
 
 			Assert(node->onConflictSet != NIL);
 			Assert(rootResultRelInfo->ri_onConflict != NULL);
@@ -977,33 +977,24 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 					int partidx,
 					bool is_borrowed_rel)
 {
-	ResultRelInfo *rootRelInfo = partRelInfo->ri_RootResultRelInfo;
 	MemoryContext oldcxt;
 	int			rri_index;
 
 	oldcxt = MemoryContextSwitchTo(proute->memcxt);
 
 	/*
-	 * Set up a tuple conversion map to convert a tuple routed to the
-	 * partition from the parent's type to the partition's.
+	 * Set up tuple conversion between root parent and the partition if the
+	 * two have different rowtypes.  If conversion is indeed required, also
+	 * initialize a slot dedicated to storing this partition's converted
+	 * tuples.  Various operations that are applied to tuples after routing,
+	 * such as checking constraints, will refer to this slot.
 	 */
-	partRelInfo->ri_RootToPartitionMap =
-		convert_tuples_by_name(RelationGetDescr(rootRelInfo->ri_RelationDesc),
-							   RelationGetDescr(partRelInfo->ri_RelationDesc));
-
-	/*
-	 * If a partition has a different rowtype than the root parent, initialize
-	 * a slot dedicated to storing this partition's tuples.  The slot is used
-	 * for various operations that are applied to tuples after routing, such
-	 * as checking constraints.
-	 */
-	if (partRelInfo->ri_RootToPartitionMap != NULL)
+	if (ExecGetRootToChildMap(partRelInfo, estate) != NULL)
 	{
 		Relation	partrel = partRelInfo->ri_RelationDesc;
 
 		/*
-		 * Initialize the slot itself setting its descriptor to this
-		 * partition's TupleDesc; TupleDesc reference will be released at the
+		 * This pins the partition's TupleDesc, which will be released at the
 		 * end of the command.
 		 */
 		partRelInfo->ri_PartitionTupleSlot =
@@ -1027,8 +1018,7 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 	 *
 	 * If the FDW does not support batching, we set the batch size to 1.
 	 */
-	if (mtstate->operation == CMD_INSERT &&
-		partRelInfo->ri_FdwRoutine != NULL &&
+	if (partRelInfo->ri_FdwRoutine != NULL &&
 		partRelInfo->ri_FdwRoutine->GetForeignModifyBatchSize &&
 		partRelInfo->ri_FdwRoutine->ExecForeignBatchInsert)
 		partRelInfo->ri_BatchSize =
@@ -1037,13 +1027,6 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 		partRelInfo->ri_BatchSize = 1;
 
 	Assert(partRelInfo->ri_BatchSize >= 1);
-
-	/*
-	 * If doing batch insert, setup back-link so we can easily find the
-	 * mtstate again.
-	 */
-	if (partRelInfo->ri_BatchSize > 1)
-		partRelInfo->ri_ModifyTableState = mtstate;
 
 	partRelInfo->ri_CopyMultiInsertBuffer = NULL;
 
@@ -1791,6 +1774,9 @@ adjust_partition_colnos_using_map(List *colnos, AttrMap *attrMap)
  *		Initialize data structure needed for run-time partition pruning and
  *		do initial pruning if needed
  *
+ * 'root_parent_relids' identifies the relation to which both the parent plan
+ * and the PartitionPruneInfo given by 'part_prune_index' belong.
+ *
  * On return, *initially_valid_subplans is assigned the set of indexes of
  * child subplans that must be initialized along with the parent plan node.
  * Initial pruning is performed here if needed and in that case only the
@@ -1803,11 +1789,24 @@ adjust_partition_colnos_using_map(List *colnos, AttrMap *attrMap)
 PartitionPruneState *
 ExecInitPartitionPruning(PlanState *planstate,
 						 int n_total_subplans,
-						 PartitionPruneInfo *pruneinfo,
+						 int part_prune_index,
+						 Bitmapset *root_parent_relids,
 						 Bitmapset **initially_valid_subplans)
 {
 	PartitionPruneState *prunestate;
 	EState	   *estate = planstate->state;
+	PartitionPruneInfo *pruneinfo;
+
+	/* Obtain the pruneinfo we need, and make sure it's the right one */
+	pruneinfo = list_nth(estate->es_part_prune_infos, part_prune_index);
+	if (!bms_equal(root_parent_relids, pruneinfo->root_parent_relids))
+		ereport(ERROR,
+				errcode(ERRCODE_INTERNAL_ERROR),
+				errmsg_internal("mismatching PartitionPruneInfo found at part_prune_index %d",
+								part_prune_index),
+				errdetail_internal("plan node relids %s, pruneinfo relids %s",
+								   bmsToString(root_parent_relids),
+								   bmsToString(pruneinfo->root_parent_relids)));
 
 	/* We may need an expression context to evaluate partition exprs */
 	ExecAssignExprContext(estate, planstate);

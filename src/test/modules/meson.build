@@ -1,3 +1,5 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 subdir('brin')
 subdir('commit_ts')
 subdir('delay_execution')
@@ -19,6 +21,7 @@ subdir('test_lfind')
 subdir('test_misc')
 subdir('test_oat_hooks')
 subdir('test_parser')
+subdir('test_pg_db_role_setting')
 subdir('test_pg_dump')
 subdir('test_predtest')
 subdir('test_rbtree')

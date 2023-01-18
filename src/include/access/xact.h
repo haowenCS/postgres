@@ -4,7 +4,7 @@
  *	  postgres transaction system definitions
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/access/xact.h
@@ -112,6 +112,13 @@ extern PGDLLIMPORT int MyXactFlags;
  * is one that requires immediate commit, such as CREATE DATABASE.
  */
 #define XACT_FLAGS_NEEDIMMEDIATECOMMIT			(1U << 2)
+
+/*
+ * XACT_FLAGS_PIPELINING - set when we complete an extended-query-protocol
+ * Execute message.  This is useful for detecting that an implicit transaction
+ * block has been created via pipelining.
+ */
+#define XACT_FLAGS_PIPELINING					(1U << 3)
 
 /*
  *	start- and end-of-transaction callbacks for dynamically loaded modules

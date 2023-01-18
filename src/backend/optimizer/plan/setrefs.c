@@ -4,7 +4,7 @@
  *	  Post-processing of a completed plan tree: fix references to subplan
  *	  vars, compute regproc values for operators, etc
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -24,6 +24,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/tlist.h"
+#include "parser/parse_relation.h"
 #include "tcop/utility.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
@@ -78,6 +79,13 @@ typedef struct
 	int			newvarno;
 } fix_windowagg_cond_context;
 
+/* Context info for flatten_rtes_walker() */
+typedef struct
+{
+	PlannerGlobal *glob;
+	Query	   *query;
+} flatten_rtes_walker_context;
+
 /*
  * Selecting the best alternative in an AlternativeSubPlan expression requires
  * estimating how many times that expression will be evaluated.  For an
@@ -113,8 +121,9 @@ typedef struct
 
 static void add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing);
 static void flatten_unplanned_rtes(PlannerGlobal *glob, RangeTblEntry *rte);
-static bool flatten_rtes_walker(Node *node, PlannerGlobal *glob);
-static void add_rte_to_flat_rtable(PlannerGlobal *glob, RangeTblEntry *rte);
+static bool flatten_rtes_walker(Node *node, flatten_rtes_walker_context *cxt);
+static void add_rte_to_flat_rtable(PlannerGlobal *glob, List *rteperminfos,
+								   RangeTblEntry *rte);
 static Plan *set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset);
 static Plan *set_indexonlyscan_references(PlannerInfo *root,
 										  IndexOnlyScan *plan,
@@ -348,6 +357,31 @@ set_plan_references(PlannerInfo *root, Plan *plan)
 		}
 	}
 
+	/* Also fix up the information in PartitionPruneInfos. */
+	foreach(lc, root->partPruneInfos)
+	{
+		PartitionPruneInfo *pruneinfo = lfirst(lc);
+		ListCell   *l;
+
+		pruneinfo->root_parent_relids =
+			offset_relid_set(pruneinfo->root_parent_relids, rtoffset);
+		foreach(l, pruneinfo->prune_infos)
+		{
+			List	   *prune_infos = lfirst(l);
+			ListCell   *l2;
+
+			foreach(l2, prune_infos)
+			{
+				PartitionedRelPruneInfo *pinfo = lfirst(l2);
+
+				/* RT index of the table to which the pinfo belongs. */
+				pinfo->rtindex += rtoffset;
+			}
+		}
+
+		glob->partPruneInfos = lappend(glob->partPruneInfos, pruneinfo);
+	}
+
 	return result;
 }
 
@@ -355,6 +389,9 @@ set_plan_references(PlannerInfo *root, Plan *plan)
  * Extract RangeTblEntries from the plan's rangetable, and add to flat rtable
  *
  * This can recurse into subquery plans; "recursing" is true if so.
+ *
+ * This also seems like a good place to add the query's RTEPermissionInfos to
+ * the flat rteperminfos.
  */
 static void
 add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
@@ -375,7 +412,7 @@ add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
 		RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
 
 		if (!recursing || rte->rtekind == RTE_RELATION)
-			add_rte_to_flat_rtable(glob, rte);
+			add_rte_to_flat_rtable(glob, root->parse->rteperminfos, rte);
 	}
 
 	/*
@@ -442,18 +479,21 @@ add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
 /*
  * Extract RangeTblEntries from a subquery that was never planned at all
  */
+
 static void
 flatten_unplanned_rtes(PlannerGlobal *glob, RangeTblEntry *rte)
 {
+	flatten_rtes_walker_context cxt = {glob, rte->subquery};
+
 	/* Use query_tree_walker to find all RTEs in the parse tree */
 	(void) query_tree_walker(rte->subquery,
 							 flatten_rtes_walker,
-							 (void *) glob,
+							 (void *) &cxt,
 							 QTW_EXAMINE_RTES_BEFORE);
 }
 
 static bool
-flatten_rtes_walker(Node *node, PlannerGlobal *glob)
+flatten_rtes_walker(Node *node, flatten_rtes_walker_context *cxt)
 {
 	if (node == NULL)
 		return false;
@@ -463,33 +503,38 @@ flatten_rtes_walker(Node *node, PlannerGlobal *glob)
 
 		/* As above, we need only save relation RTEs */
 		if (rte->rtekind == RTE_RELATION)
-			add_rte_to_flat_rtable(glob, rte);
+			add_rte_to_flat_rtable(cxt->glob, cxt->query->rteperminfos, rte);
 		return false;
 	}
 	if (IsA(node, Query))
 	{
-		/* Recurse into subselects */
+		/*
+		 * Recurse into subselects.  Must update cxt->query to this query so
+		 * that the rtable and rteperminfos correspond with each other.
+		 */
+		cxt->query = (Query *) node;
 		return query_tree_walker((Query *) node,
 								 flatten_rtes_walker,
-								 (void *) glob,
+								 (void *) cxt,
 								 QTW_EXAMINE_RTES_BEFORE);
 	}
 	return expression_tree_walker(node, flatten_rtes_walker,
-								  (void *) glob);
+								  (void *) cxt);
 }
 
 /*
- * Add (a copy of) the given RTE to the final rangetable
+ * Add (a copy of) the given RTE to the final rangetable and also the
+ * corresponding RTEPermissionInfo, if any, to final rteperminfos.
  *
  * In the flat rangetable, we zero out substructure pointers that are not
  * needed by the executor; this reduces the storage space and copying cost
- * for cached plans.  We keep only the ctename, alias and eref Alias fields,
- * which are needed by EXPLAIN, and the selectedCols, insertedCols,
- * updatedCols, and extraUpdatedCols bitmaps, which are needed for
- * executor-startup permissions checking and for trigger event checking.
+ * for cached plans.  We keep only the ctename, alias, eref Alias fields,
+ * which are needed by EXPLAIN, and perminfoindex which is needed by the
+ * executor to fetch the RTE's RTEPermissionInfo.
  */
 static void
-add_rte_to_flat_rtable(PlannerGlobal *glob, RangeTblEntry *rte)
+add_rte_to_flat_rtable(PlannerGlobal *glob, List *rteperminfos,
+					   RangeTblEntry *rte)
 {
 	RangeTblEntry *newrte;
 
@@ -527,6 +572,29 @@ add_rte_to_flat_rtable(PlannerGlobal *glob, RangeTblEntry *rte)
 	 */
 	if (newrte->rtekind == RTE_RELATION)
 		glob->relationOids = lappend_oid(glob->relationOids, newrte->relid);
+
+	/*
+	 * Add a copy of the RTEPermissionInfo, if any, corresponding to this RTE
+	 * to the flattened global list.
+	 */
+	if (rte->perminfoindex > 0)
+	{
+		RTEPermissionInfo *perminfo;
+		RTEPermissionInfo *newperminfo;
+
+		/* Get the existing one from this query's rteperminfos. */
+		perminfo = getRTEPermissionInfo(rteperminfos, newrte);
+
+		/*
+		 * Add a new one to finalrteperminfos and copy the contents of the
+		 * existing one into it.  Note that addRTEPermissionInfo() also
+		 * updates newrte->perminfoindex to point to newperminfo in
+		 * finalrteperminfos.
+		 */
+		newrte->perminfoindex = 0;	/* expected by addRTEPermissionInfo() */
+		newperminfo = addRTEPermissionInfo(&glob->finalrteperminfos, newrte);
+		memcpy(newperminfo, perminfo, sizeof(RTEPermissionInfo));
+	}
 }
 
 /*
@@ -1658,21 +1726,12 @@ set_append_references(PlannerInfo *root,
 
 	aplan->apprelids = offset_relid_set(aplan->apprelids, rtoffset);
 
-	if (aplan->part_prune_info)
-	{
-		foreach(l, aplan->part_prune_info->prune_infos)
-		{
-			List	   *prune_infos = lfirst(l);
-			ListCell   *l2;
-
-			foreach(l2, prune_infos)
-			{
-				PartitionedRelPruneInfo *pinfo = lfirst(l2);
-
-				pinfo->rtindex += rtoffset;
-			}
-		}
-	}
+	/*
+	 * PartitionPruneInfos will be added to a list in PlannerGlobal, so update
+	 * the index.
+	 */
+	if (aplan->part_prune_index >= 0)
+		aplan->part_prune_index += list_length(root->glob->partPruneInfos);
 
 	/* We don't need to recurse to lefttree or righttree ... */
 	Assert(aplan->plan.lefttree == NULL);
@@ -1734,21 +1793,12 @@ set_mergeappend_references(PlannerInfo *root,
 
 	mplan->apprelids = offset_relid_set(mplan->apprelids, rtoffset);
 
-	if (mplan->part_prune_info)
-	{
-		foreach(l, mplan->part_prune_info->prune_infos)
-		{
-			List	   *prune_infos = lfirst(l);
-			ListCell   *l2;
-
-			foreach(l2, prune_infos)
-			{
-				PartitionedRelPruneInfo *pinfo = lfirst(l2);
-
-				pinfo->rtindex += rtoffset;
-			}
-		}
-	}
+	/*
+	 * PartitionPruneInfos will be added to a list in PlannerGlobal, so update
+	 * the index.
+	 */
+	if (mplan->part_prune_index >= 0)
+		mplan->part_prune_index += list_length(root->glob->partPruneInfos);
 
 	/* We don't need to recurse to lefttree or righttree ... */
 	Assert(mplan->plan.lefttree == NULL);

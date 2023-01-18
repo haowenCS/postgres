@@ -1,3 +1,5 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 pg_walinspect_sources = files('pg_walinspect.c')
 
 if host_system == 'windows'
@@ -28,6 +30,9 @@ tests += {
     'sql': [
       'pg_walinspect',
     ],
+    # Disabled because these tests require "wal_level=replica", which
+    # some runningcheck users do not have (e.g. buildfarm clients).
     'regress_args': ['--temp-config', files('walinspect.conf')],
+    'runningcheck': false,
   },
 }

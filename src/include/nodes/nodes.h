@@ -4,7 +4,7 @@
  *	  Definitions for tagged nodes.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/nodes.h
@@ -85,6 +85,12 @@ typedef enum NodeTag
  *   scalar or a list, in which case the length of the list is used.
  *
  * - copy_as(VALUE): In copyObject(), replace the field's value with VALUE.
+ *
+ * - copy_as_scalar: In copyObject(), copy the field as a scalar value
+ *   (e.g. a pointer) even if it is a node-type pointer.
+ *
+ * - equal_as_scalar: In equal(), compare the field as a scalar value
+ *   even if it is a node-type pointer.
  *
  * - equal_ignore: Ignore the field for equality.
  *

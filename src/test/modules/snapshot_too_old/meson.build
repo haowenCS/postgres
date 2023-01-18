@@ -1,3 +1,5 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 tests += {
   'name': 'snapshot_too_old',
   'sd': meson.current_source_dir(),
@@ -10,5 +12,8 @@ tests += {
       'sto_using_hash_index',
     ],
     'regress_args': ['--temp-config', files('sto.conf')],
+    # Disabled because these tests require "old_snapshot_threshold" >= 0, which
+    # typical runningcheck users do not have (e.g. buildfarm clients).
+    'runningcheck': false,
   },
 }

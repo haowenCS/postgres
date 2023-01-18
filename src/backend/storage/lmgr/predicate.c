@@ -135,7 +135,7 @@
  *		- Protects both PredXact and SerializableXidHash.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -490,14 +490,13 @@ static void ReleasePredicateLocksLocal(void);
 
 /*
  * Does this relation participate in predicate locking? Temporary and system
- * relations are exempt, as are materialized views.
+ * relations are exempt.
  */
 static inline bool
 PredicateLockingNeededForRelation(Relation relation)
 {
 	return !(relation->rd_id < FirstUnpinnedObjectId ||
-			 RelationUsesLocalBuffers(relation) ||
-			 relation->rd_rel->relkind == RELKIND_MATVIEW);
+			 RelationUsesLocalBuffers(relation));
 }
 
 /*

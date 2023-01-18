@@ -3,7 +3,7 @@
  * relcache.c
  *	  POSTGRES relation descriptor cache code
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -847,8 +847,8 @@ RelationBuildRuleLock(Relation relation)
 
 		/*
 		 * Scan through the rule's actions and set the checkAsUser field on
-		 * all rtable entries. We have to look at the qual as well, in case it
-		 * contains sublinks.
+		 * all RTEPermissionInfos. We have to look at the qual as well, in
+		 * case it contains sublinks.
 		 *
 		 * The reason for doing this when the rule is loaded, rather than when
 		 * it is stored, is that otherwise ALTER TABLE OWNER would have to
@@ -2660,6 +2660,13 @@ RelationClearRelation(Relation relation, bool rebuild)
 			 */
 			elog(ERROR, "relation %u deleted while still in use", save_relid);
 		}
+
+		/*
+		 * If we were to, again, have cases of the relkind of a relcache entry
+		 * changing, we would need to ensure that pgstats does not get
+		 * confused.
+		 */
+		Assert(relation->rd_rel->relkind == newrel->rd_rel->relkind);
 
 		keep_tupdesc = equalTupleDescs(relation->rd_att, newrel->rd_att);
 		keep_rules = equalRuleLocks(relation->rd_rules, newrel->rd_rules);

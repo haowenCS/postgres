@@ -1,3 +1,5 @@
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
+
 # FIXME: prevent install during main install, but not during test :/
 install_data(
   'test_pg_dump.control',
@@ -13,6 +15,8 @@ tests += {
     'sql': [
       'test_pg_dump',
     ],
+    # doesn't delete its user
+    'runningcheck': false,
   },
   'tap': {
     'tests': [

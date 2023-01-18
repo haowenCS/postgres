@@ -4,7 +4,7 @@
  *	  support for the POSTGRES executor module
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/executor/executor.h
@@ -80,8 +80,10 @@ extern PGDLLIMPORT ExecutorFinish_hook_type ExecutorFinish_hook;
 typedef void (*ExecutorEnd_hook_type) (QueryDesc *queryDesc);
 extern PGDLLIMPORT ExecutorEnd_hook_type ExecutorEnd_hook;
 
-/* Hook for plugins to get control in ExecCheckRTPerms() */
-typedef bool (*ExecutorCheckPerms_hook_type) (List *, bool);
+/* Hook for plugins to get control in ExecCheckPermissions() */
+typedef bool (*ExecutorCheckPerms_hook_type) (List *rangeTable,
+											  List *rtePermInfos,
+											  bool ereport_on_violation);
 extern PGDLLIMPORT ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook;
 
 
@@ -196,7 +198,8 @@ extern void standard_ExecutorFinish(QueryDesc *queryDesc);
 extern void ExecutorEnd(QueryDesc *queryDesc);
 extern void standard_ExecutorEnd(QueryDesc *queryDesc);
 extern void ExecutorRewind(QueryDesc *queryDesc);
-extern bool ExecCheckRTPerms(List *rangeTable, bool ereport_on_violation);
+extern bool ExecCheckPermissions(List *rangeTable,
+								 List *rteperminfos, bool ereport_on_violation);
 extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation);
 extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Relation resultRelationDesc,
@@ -600,7 +603,9 @@ extern TupleTableSlot *ExecGetTriggerOldSlot(EState *estate, ResultRelInfo *relI
 extern TupleTableSlot *ExecGetTriggerNewSlot(EState *estate, ResultRelInfo *relInfo);
 extern TupleTableSlot *ExecGetReturningSlot(EState *estate, ResultRelInfo *relInfo);
 extern TupleConversionMap *ExecGetChildToRootMap(ResultRelInfo *resultRelInfo);
+extern TupleConversionMap *ExecGetRootToChildMap(ResultRelInfo *resultRelInfo, EState *estate);
 
+extern Oid	ExecGetResultRelCheckAsUser(ResultRelInfo *relInfo, EState *estate);
 extern Bitmapset *ExecGetInsertedCols(ResultRelInfo *relinfo, EState *estate);
 extern Bitmapset *ExecGetUpdatedCols(ResultRelInfo *relinfo, EState *estate);
 extern Bitmapset *ExecGetExtraUpdatedCols(ResultRelInfo *relinfo, EState *estate);

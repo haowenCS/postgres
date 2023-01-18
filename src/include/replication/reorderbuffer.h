@@ -2,7 +2,7 @@
  * reorderbuffer.h
  *	  PostgreSQL logical replay/reorder buffer management.
  *
- * Copyright (c) 2012-2022, PostgreSQL Global Development Group
+ * Copyright (c) 2012-2023, PostgreSQL Global Development Group
  *
  * src/include/replication/reorderbuffer.h
  */
@@ -18,6 +18,14 @@
 #include "utils/timestamp.h"
 
 extern PGDLLIMPORT int logical_decoding_work_mem;
+extern PGDLLIMPORT int logical_decoding_mode;
+
+/* possible values for logical_decoding_mode */
+typedef enum
+{
+	LOGICAL_DECODING_MODE_BUFFERED,
+	LOGICAL_DECODING_MODE_IMMEDIATE
+} LogicalDecodingMode;
 
 /* an individual tuple, stored in one chunk of memory */
 typedef struct ReorderBufferTupleBuf
@@ -168,14 +176,15 @@ typedef struct ReorderBufferChange
 } ReorderBufferChange;
 
 /* ReorderBufferTXN txn_flags */
-#define RBTXN_HAS_CATALOG_CHANGES 0x0001
-#define RBTXN_IS_SUBXACT          0x0002
-#define RBTXN_IS_SERIALIZED       0x0004
-#define RBTXN_IS_SERIALIZED_CLEAR 0x0008
-#define RBTXN_IS_STREAMED         0x0010
-#define RBTXN_HAS_PARTIAL_CHANGE  0x0020
-#define RBTXN_PREPARE             0x0040
-#define RBTXN_SKIPPED_PREPARE	  0x0080
+#define RBTXN_HAS_CATALOG_CHANGES 	0x0001
+#define RBTXN_IS_SUBXACT          	0x0002
+#define RBTXN_IS_SERIALIZED       	0x0004
+#define RBTXN_IS_SERIALIZED_CLEAR 	0x0008
+#define RBTXN_IS_STREAMED         	0x0010
+#define RBTXN_HAS_PARTIAL_CHANGE  	0x0020
+#define RBTXN_PREPARE             	0x0040
+#define RBTXN_SKIPPED_PREPARE	  	0x0080
+#define RBTXN_HAS_STREAMABLE_CHANGE	0x0100
 
 /* Does the transaction have catalog changes? */
 #define rbtxn_has_catalog_changes(txn) \
@@ -205,6 +214,12 @@ typedef struct ReorderBufferChange
 #define rbtxn_has_partial_change(txn) \
 ( \
 	((txn)->txn_flags & RBTXN_HAS_PARTIAL_CHANGE) != 0 \
+)
+
+/* Does this transaction contain streamable changes? */
+#define rbtxn_has_streamable_change(txn) \
+( \
+	((txn)->txn_flags & RBTXN_HAS_STREAMABLE_CHANGE) != 0 \
 )
 
 /*
@@ -301,6 +316,7 @@ typedef struct ReorderBufferTXN
 	{
 		TimestampTz commit_time;
 		TimestampTz prepare_time;
+		TimestampTz abort_time;
 	}			xact_time;
 
 	/*
@@ -663,7 +679,8 @@ extern void ReorderBufferAssignChild(ReorderBuffer *rb, TransactionId xid,
 extern void ReorderBufferCommitChild(ReorderBuffer *rb, TransactionId xid,
 									 TransactionId subxid, XLogRecPtr commit_lsn,
 									 XLogRecPtr end_lsn);
-extern void ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn);
+extern void ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn,
+							   TimestampTz abort_time);
 extern void ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid);
 extern void ReorderBufferForget(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn);
 extern void ReorderBufferInvalidate(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn);

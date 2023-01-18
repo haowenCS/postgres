@@ -3,7 +3,7 @@
  * tsgistidx.c
  *	  GiST support functions for tsvector_ops
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -87,10 +87,12 @@ static int32 sizebitvec(BITVECP sign, int siglen);
 Datum
 gtsvectorin(PG_FUNCTION_ARGS)
 {
+	/* There's no need to support input of gtsvectors */
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("gtsvector_in not implemented")));
-	PG_RETURN_DATUM(0);
+			 errmsg("cannot accept a value of type %s", "gtsvector")));
+
+	PG_RETURN_VOID();			/* keep compiler quiet */
 }
 
 #define SINGOUTSTR	"%d true bits, %d false bits"

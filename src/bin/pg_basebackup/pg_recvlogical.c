@@ -3,7 +3,7 @@
  * pg_recvlogical.c - receive data from a logical decoding slot in a streaming
  *					  fashion and write it to a local file.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  src/bin/pg_basebackup/pg_recvlogical.c
@@ -728,7 +728,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "E:f:F:nvtd:h:p:U:wWI:o:P:s:S:",
+	while ((c = getopt_long(argc, argv, "E:f:F:ntvd:h:p:U:wWI:o:P:s:S:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -747,11 +747,11 @@ main(int argc, char **argv)
 			case 'n':
 				noloop = 1;
 				break;
-			case 'v':
-				verbose++;
-				break;
 			case 't':
 				two_phase = true;
+				break;
+			case 'v':
+				verbose++;
 				break;
 /* connection options */
 			case 'd':

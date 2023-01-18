@@ -19,7 +19,7 @@
  * not provided.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/nodes/execnodes.h
@@ -462,6 +462,9 @@ typedef struct ResultRelInfo
 	 */
 	AttrNumber	ri_RowIdAttNo;
 
+	/* For INSERT/UPDATE, attnums of generated columns to be computed */
+	Bitmapset  *ri_extraUpdatedCols;
+
 	/* Projection to generate new tuple in an INSERT/UPDATE */
 	ProjectionInfo *ri_projectNew;
 	/* Slot to hold that tuple */
@@ -539,22 +542,6 @@ typedef struct ResultRelInfo
 	ExprState  *ri_PartitionCheckExpr;
 
 	/*
-	 * Information needed by tuple routing target relations
-	 *
-	 * RootResultRelInfo gives the target relation mentioned in the query, if
-	 * it's a partitioned table. It is not set if the target relation
-	 * mentioned in the query is an inherited table, nor when tuple routing is
-	 * not needed.
-	 *
-	 * RootToPartitionMap and PartitionTupleSlot, initialized by
-	 * ExecInitRoutingInfo, are non-NULL if partition has a different tuple
-	 * format than the root table.
-	 */
-	struct ResultRelInfo *ri_RootResultRelInfo;
-	TupleConversionMap *ri_RootToPartitionMap;
-	TupleTableSlot *ri_PartitionTupleSlot;
-
-	/*
 	 * Map to convert child result relation tuples to the format of the table
 	 * actually mentioned in the query (called "root").  Computed only if
 	 * needed.  A NULL map value indicates that no conversion is needed, so we
@@ -562,6 +549,26 @@ typedef struct ResultRelInfo
 	 */
 	TupleConversionMap *ri_ChildToRootMap;
 	bool		ri_ChildToRootMapValid;
+
+	/*
+	 * As above, but in the other direction.
+	 */
+	TupleConversionMap *ri_RootToChildMap;
+	bool		ri_RootToChildMapValid;
+
+	/*
+	 * Information needed by tuple routing target relations
+	 *
+	 * RootResultRelInfo gives the target relation mentioned in the query, if
+	 * it's a partitioned table. It is not set if the target relation
+	 * mentioned in the query is an inherited table, nor when tuple routing is
+	 * not needed.
+	 *
+	 * PartitionTupleSlot is non-NULL if RootToChild conversion is needed and
+	 * the relation is a partition.
+	 */
+	struct ResultRelInfo *ri_RootResultRelInfo;
+	TupleTableSlot *ri_PartitionTupleSlot;
 
 	/* for use by copyfrom.c when performing multi-inserts */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
@@ -571,9 +578,6 @@ typedef struct ResultRelInfo
 	 * one of its ancestors; see ExecCrossPartitionUpdateForeignKey().
 	 */
 	List	   *ri_ancestorResultRels;
-
-	/* for use by nodeModifyTable.c when performing batch-inserts */
-	struct ModifyTableState *ri_ModifyTableState;
 } ResultRelInfo;
 
 /* ----------------
@@ -613,7 +617,9 @@ typedef struct EState
 								 * pointers, or NULL if not yet opened */
 	struct ExecRowMark **es_rowmarks;	/* Array of per-range-table-entry
 										 * ExecRowMarks, or NULL if none */
+	List	   *es_rteperminfos;	/* List of RTEPermissionInfo */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
+	List	   *es_part_prune_infos;	/* PlannedStmt.partPruneInfos */
 	const char *es_sourceText;	/* Source text from QueryDesc */
 
 	JunkFilter *es_junkFilter;	/* top-level junk filter, if any */
@@ -697,10 +703,11 @@ typedef struct EState
 	struct JitInstrumentation *es_jit_worker_instr;
 
 	/*
-	 * The following list contains ResultRelInfos for foreign tables on which
-	 * batch-inserts are to be executed.
+	 * Lists of ResultRelInfos for foreign tables on which batch-inserts are
+	 * to be executed and owning ModifyTableStates, stored in the same order.
 	 */
 	List	   *es_insert_pending_result_relations;
+	List	   *es_insert_pending_modifytables;
 } EState;
 
 

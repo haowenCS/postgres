@@ -4,7 +4,7 @@
  *	  PostgreSQL logical replay/reorder buffer management
  *
  *
- * Copyright (c) 2012-2022, PostgreSQL Global Development Group
+ * Copyright (c) 2012-2023, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -208,6 +208,9 @@ typedef struct ReorderBufferDiskChange
  */
 int			logical_decoding_work_mem;
 static const Size max_changes_in_memory = 4096; /* XXX for restore only */
+
+/* GUC variable */
+int			logical_decoding_mode = LOGICAL_DECODING_MODE_BUFFERED;
 
 /* ---------------------------------------
  * primary reorderbuffer support routines
@@ -695,9 +698,9 @@ ReorderBufferTXNByXid(ReorderBuffer *rb, TransactionId xid, bool create,
  * Record the partial change for the streaming of in-progress transactions.  We
  * can stream only complete changes so if we have a partial change like toast
  * table insert or speculative insert then we mark such a 'txn' so that it
- * can't be streamed.  We also ensure that if the changes in such a 'txn' are
- * above logical_decoding_work_mem threshold then we stream them as soon as we
- * have a complete change.
+ * can't be streamed.  We also ensure that if the changes in such a 'txn' can
+ * be streamed and are above logical_decoding_work_mem threshold then we stream
+ * them as soon as we have a complete change.
  */
 static void
 ReorderBufferProcessPartialChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
@@ -762,7 +765,8 @@ ReorderBufferProcessPartialChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	 */
 	if (ReorderBufferCanStartStreaming(rb) &&
 		!(rbtxn_has_partial_change(toptxn)) &&
-		rbtxn_is_serialized(txn))
+		rbtxn_is_serialized(txn) &&
+		rbtxn_has_streamable_change(toptxn))
 		ReorderBufferStreamTXN(rb, toptxn);
 }
 
@@ -791,6 +795,29 @@ ReorderBufferQueueChange(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn,
 		 */
 		ReorderBufferReturnChange(rb, change, false);
 		return;
+	}
+
+	/*
+	 * The changes that are sent downstream are considered streamable.  We
+	 * remember such transactions so that only those will later be considered
+	 * for streaming.
+	 */
+	if (change->action == REORDER_BUFFER_CHANGE_INSERT ||
+		change->action == REORDER_BUFFER_CHANGE_UPDATE ||
+		change->action == REORDER_BUFFER_CHANGE_DELETE ||
+		change->action == REORDER_BUFFER_CHANGE_INTERNAL_SPEC_INSERT ||
+		change->action == REORDER_BUFFER_CHANGE_TRUNCATE ||
+		change->action == REORDER_BUFFER_CHANGE_MESSAGE)
+	{
+		ReorderBufferTXN *toptxn;
+
+		/* get the top transaction */
+		if (txn->toptxn != NULL)
+			toptxn = txn->toptxn;
+		else
+			toptxn = txn;
+
+		toptxn->txn_flags |= RBTXN_HAS_STREAMABLE_CHANGE;
 	}
 
 	change->lsn = lsn;
@@ -2846,7 +2873,8 @@ ReorderBufferFinishPrepared(ReorderBuffer *rb, TransactionId xid,
  * disk.
  */
 void
-ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn)
+ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn,
+				   TimestampTz abort_time)
 {
 	ReorderBufferTXN *txn;
 
@@ -2856,6 +2884,8 @@ ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn)
 	/* unknown, nothing to remove */
 	if (txn == NULL)
 		return;
+
+	txn->xact_time.abort_time = abort_time;
 
 	/* For streamed transactions notify the remote node about the abort. */
 	if (rbtxn_is_streamed(txn))
@@ -2909,6 +2939,10 @@ ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid)
 		{
 			elog(DEBUG2, "aborting old transaction %u", txn->xid);
 
+			/* Notify the remote node about the crash/immediate restart. */
+			if (rbtxn_is_streamed(txn))
+				rb->stream_abort(rb, txn, InvalidXLogRecPtr);
+
 			/* remove potential on-disk data, and deallocate this tx */
 			ReorderBufferCleanupTXN(rb, txn);
 		}
@@ -2942,9 +2976,8 @@ ReorderBufferForget(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn)
 	if (txn == NULL)
 		return;
 
-	/* For streamed transactions notify the remote node about the abort. */
-	if (rbtxn_is_streamed(txn))
-		rb->stream_abort(rb, txn, lsn);
+	/* this transaction mustn't be streamed */
+	Assert(!rbtxn_is_streamed(txn));
 
 	/* cosmetic... */
 	txn->final_lsn = lsn;
@@ -3460,14 +3493,15 @@ ReorderBufferLargestTXN(ReorderBuffer *rb)
 }
 
 /*
- * Find the largest toplevel transaction to evict (by streaming).
+ * Find the largest streamable toplevel transaction to evict (by streaming).
  *
  * This can be seen as an optimized version of ReorderBufferLargestTXN, which
  * should give us the same transaction (because we don't update memory account
  * for subtransaction with streaming, so it's always 0). But we can simply
  * iterate over the limited number of toplevel transactions that have a base
  * snapshot. There is no use of selecting a transaction that doesn't have base
- * snapshot because we don't decode such transactions.
+ * snapshot because we don't decode such transactions.  Also, we do not select
+ * the transaction which doesn't have any streamable change.
  *
  * Note that, we skip transactions that contains incomplete changes. There
  * is a scope of optimization here such that we can select the largest
@@ -3483,7 +3517,7 @@ ReorderBufferLargestTXN(ReorderBuffer *rb)
  * the subxact from where we streamed the last change.
  */
 static ReorderBufferTXN *
-ReorderBufferLargestTopTXN(ReorderBuffer *rb)
+ReorderBufferLargestStreamableTopTXN(ReorderBuffer *rb)
 {
 	dlist_iter	iter;
 	Size		largest_size = 0;
@@ -3502,7 +3536,8 @@ ReorderBufferLargestTopTXN(ReorderBuffer *rb)
 		Assert(txn->base_snapshot != NULL);
 
 		if ((largest == NULL || txn->total_size > largest_size) &&
-			(txn->total_size > 0) && !(rbtxn_has_partial_change(txn)))
+			(txn->total_size > 0) && !(rbtxn_has_partial_change(txn)) &&
+			rbtxn_has_streamable_change(txn))
 		{
 			largest = txn;
 			largest_size = txn->total_size;
@@ -3515,7 +3550,10 @@ ReorderBufferLargestTopTXN(ReorderBuffer *rb)
 /*
  * Check whether the logical_decoding_work_mem limit was reached, and if yes
  * pick the largest (sub)transaction at-a-time to evict and spill its changes to
- * disk until we reach under the memory limit.
+ * disk or send to the output plugin until we reach under the memory limit.
+ *
+ * If logical_decoding_mode is set to "immediate", stream or serialize the changes
+ * immediately.
  *
  * XXX At this point we select the transactions until we reach under the memory
  * limit, but we might also adapt a more elaborate eviction strategy - for example
@@ -3527,27 +3565,34 @@ ReorderBufferCheckMemoryLimit(ReorderBuffer *rb)
 {
 	ReorderBufferTXN *txn;
 
-	/* bail out if we haven't exceeded the memory limit */
-	if (rb->size < logical_decoding_work_mem * 1024L)
+	/*
+	 * Bail out if logical_decoding_mode is buffered and we haven't exceeded
+	 * the memory limit.
+	 */
+	if (logical_decoding_mode == LOGICAL_DECODING_MODE_BUFFERED &&
+		rb->size < logical_decoding_work_mem * 1024L)
 		return;
 
 	/*
-	 * Loop until we reach under the memory limit.  One might think that just
-	 * by evicting the largest (sub)transaction we will come under the memory
-	 * limit based on assumption that the selected transaction is at least as
-	 * large as the most recent change (which caused us to go over the memory
-	 * limit). However, that is not true because a user can reduce the
-	 * logical_decoding_work_mem to a smaller value before the most recent
+	 * If logical_decoding_mode is immediate, loop until there's no change.
+	 * Otherwise, loop until we reach under the memory limit. One might think
+	 * that just by evicting the largest (sub)transaction we will come under
+	 * the memory limit based on assumption that the selected transaction is
+	 * at least as large as the most recent change (which caused us to go over
+	 * the memory limit). However, that is not true because a user can reduce
+	 * the logical_decoding_work_mem to a smaller value before the most recent
 	 * change.
 	 */
-	while (rb->size >= logical_decoding_work_mem * 1024L)
+	while (rb->size >= logical_decoding_work_mem * 1024L ||
+		   (logical_decoding_mode == LOGICAL_DECODING_MODE_IMMEDIATE &&
+			rb->size > 0))
 	{
 		/*
 		 * Pick the largest transaction (or subtransaction) and evict it from
 		 * memory by streaming, if possible.  Otherwise, spill to disk.
 		 */
 		if (ReorderBufferCanStartStreaming(rb) &&
-			(txn = ReorderBufferLargestTopTXN(rb)) != NULL)
+			(txn = ReorderBufferLargestStreamableTopTXN(rb)) != NULL)
 		{
 			/* we know there has to be one, because the size is not zero */
 			Assert(txn && !txn->toptxn);
@@ -3919,7 +3964,7 @@ ReorderBufferCanStartStreaming(ReorderBuffer *rb)
 	 * restarting.
 	 */
 	if (ReorderBufferCanStream(rb) &&
-		!SnapBuildXactNeedsSkip(builder, ctx->reader->EndRecPtr))
+		!SnapBuildXactNeedsSkip(builder, ctx->reader->ReadRecPtr))
 		return true;
 
 	return false;

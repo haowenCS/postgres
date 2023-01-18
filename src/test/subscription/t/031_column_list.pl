@@ -1,4 +1,4 @@
-# Copyright (c) 2022, PostgreSQL Global Development Group
+# Copyright (c) 2022-2023, PostgreSQL Global Development Group
 
 # Test partial-column publication of tables
 use strict;
@@ -1151,6 +1151,86 @@ is( $node_subscriber->safe_psql(
 4||),
 	'publication containing both parent and child relation');
 
+# TEST: Only columns in the column list should exist in the old tuple of UPDATE
+# and DELETE.
+
+$node_publisher->safe_psql(
+	'postgres', qq(
+	CREATE TABLE test_oldtuple_col (a int PRIMARY KEY, b int, c int);
+	CREATE PUBLICATION pub_check_oldtuple FOR TABLE test_oldtuple_col (a, b);
+	INSERT INTO test_oldtuple_col VALUES(1, 2, 3);
+	SELECT * FROM pg_create_logical_replication_slot('test_slot', 'pgoutput');
+	UPDATE test_oldtuple_col SET a = 2;
+	DELETE FROM test_oldtuple_col;
+));
+
+
+# Check at 7th byte of binary data for the number of columns in the old tuple.
+#
+# 7 = 1 (count from 1) + 1 byte (message type) + 4 byte (relid) + 1 byte (flag
+# for old key).
+#
+# The message type of UPDATE is 85('U').
+# The message type of DELETE is 68('D').
+$result = $node_publisher->safe_psql(
+	'postgres', qq(
+		SELECT substr(data, 7, 2) = int2send(2::smallint)
+		FROM pg_logical_slot_peek_binary_changes('test_slot', NULL, NULL,
+			'proto_version', '1',
+			'publication_names', 'pub_check_oldtuple')
+		WHERE get_byte(data, 0) = 85 OR get_byte(data, 0) = 68
+));
+
+is( $result, qq(t
+t), 'check the number of columns in the old tuple');
+
+# TEST: Generated and dropped columns are not considered for the column list.
+# So, the publication having a column list except for those columns and a
+# publication without any column (aka all columns as part of the columns
+# list) are considered to have the same column list.
+$node_publisher->safe_psql(
+	'postgres', qq(
+	CREATE TABLE test_mix_4 (a int PRIMARY KEY, b int, c int, d int GENERATED ALWAYS AS (a + 1) STORED);
+	ALTER TABLE test_mix_4 DROP COLUMN c;
+
+	CREATE PUBLICATION pub_mix_7 FOR TABLE test_mix_4 (a, b);
+	CREATE PUBLICATION pub_mix_8 FOR TABLE test_mix_4;
+
+	-- initial data
+	INSERT INTO test_mix_4 VALUES (1, 2);
+));
+
+$node_subscriber->safe_psql(
+	'postgres', qq(
+	DROP SUBSCRIPTION sub1;
+	CREATE TABLE test_mix_4 (a int PRIMARY KEY, b int, c int, d int);
+));
+
+$node_subscriber->safe_psql(
+	'postgres', qq(
+	CREATE SUBSCRIPTION sub1 CONNECTION '$publisher_connstr' PUBLICATION pub_mix_7, pub_mix_8;
+));
+
+$node_subscriber->wait_for_subscription_sync;
+
+is( $node_subscriber->safe_psql(
+		'postgres', "SELECT * FROM test_mix_4 ORDER BY a"),
+	qq(1|2||),
+	'initial synchronization with multiple publications with the same column list'
+);
+
+$node_publisher->safe_psql(
+	'postgres', qq(
+	INSERT INTO test_mix_4 VALUES (3, 4);
+));
+
+$node_publisher->wait_for_catchup('sub1');
+
+is( $node_subscriber->safe_psql(
+		'postgres', "SELECT * FROM test_mix_4 ORDER BY a"),
+	qq(1|2||
+3|4||),
+	'replication with multiple publications with the same column list');
 
 # TEST: With a table included in multiple publications with different column
 # lists, we should catch the error when creating the subscription.

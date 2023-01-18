@@ -4,7 +4,7 @@
  *	  Internal definitions for COPY FROM command.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/commands/copyfrom_internal.h
@@ -97,7 +97,8 @@ typedef struct CopyFromStateData
 	int		   *defmap;			/* array of default att numbers */
 	ExprState **defexprs;		/* array of default att expressions */
 	bool		volatile_defexprs;	/* is any of defexprs volatile? */
-	List	   *range_table;
+	List	   *range_table;	/* single element list of RangeTblEntry */
+	List	   *rteperminfos;	/* single element list of RTEPermissionInfo */
 	ExprState  *qualexpr;
 
 	TransitionCaptureState *transition_capture;

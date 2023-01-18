@@ -6,7 +6,7 @@
  *
  * This code is released under the terms of the PostgreSQL License.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/test/regress/regress.c
@@ -183,6 +183,11 @@ widget_in(PG_FUNCTION_ARGS)
 			coord[i++] = p + 1;
 	}
 
+	/*
+	 * Note: DON'T convert this error to "soft" style (errsave/ereturn).  We
+	 * want this data type to stay permanently in the hard-error world so that
+	 * it can be used for testing that such cases still work reasonably.
+	 */
 	if (i < NARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
