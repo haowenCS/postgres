@@ -68,3 +68,8 @@ Debug using gdb: bt: backtracing
 2. b ExecResult
 3. bt
 
+---
+changing the passward:
+
+ALTER USER postgres PASSWORD 'myPassword';
+

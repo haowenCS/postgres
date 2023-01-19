@@ -1,0 +1,4 @@
+
+## 1. PostgreSQL 中的遗传算法
+
+GA 是一种启发式的优化法，随机搜素。在PostgreSQL中，遗传算法主要用在连接路径（Join path)的生成操作中。
