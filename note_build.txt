@@ -63,3 +63,8 @@ Debug using gdb: bt: backtracing
     2. sudo apt-get install libpam0g-dev
     3. sudo apt-get install -y libperl-dev
     4. ../configure --prefix=$PWD --with-perl --with-tcl --with-python --with-openssl --with-pam --without-ldap --with-libxml --with-libxslt --enable-thread-safety --with-wal-blocksize=16 --with-blocksize=16 --enable-dtrace --enable-debug
+
+1. cd bin; sudo gdb postgres pid;
+2. b ExecResult
+3. bt
+
