@@ -119,3 +119,4 @@ if __name__ == "__main__":
     sql1 = 'SELECT * FROM weather;'
     r1 = db_conn.fetch_results(sql1)
     print(r1)
+    db_conn.close_db()
