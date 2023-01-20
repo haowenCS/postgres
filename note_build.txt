@@ -56,6 +56,11 @@ Debug: https://www.cnblogs.com/flying-tiger/p/5866660.html
     and re-run. "./bin/pg_ctl -D ./data/ start; ./bin/psql postgres"
 
 ---
+
+export CFLAGS="-g -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Wendif-labels -Wformat-security -fno-strict-aliasing -fwrapv"
+
+../configure --prefix=$PWD --with-perl --with-tcl --with-python --with-openssl --with-pam --without-ldap --with-libxml --with-libxslt --enable-thread-safety --with-wal-blocksize=16 --with-blocksize=16 --enable-dtrace --enable-debug
+
 Debug using gdb: bt: backtracing
 
     0. export CFLAGS="-g -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Wendif-labels -Wformat-security -fno-strict-aliasing -fwrapv"
