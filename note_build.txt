@@ -72,6 +72,7 @@ Debug using gdb: bt: backtracing
 1. cd bin; sudo gdb postgres pid;
 2. b ExecResult
 3. bt
+4. p variable
 
 ---
 changing the passward:
