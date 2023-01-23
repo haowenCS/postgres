@@ -6,6 +6,9 @@
 
 \d table_name: describe table
 
+\i path_to_sql.sql: execute sql file
+
+
 ---
 
 resources:
